@@ -15,9 +15,11 @@ from transformers import (
     BitsAndBytesConfig,
     PreTrainedTokenizer,
     PreTrainedModel,
+    get_linear_schedule_with_warmup,
 )
 from peft import get_peft_model, LoraConfig, PeftModel, PeftConfig, PeftMixedModel
 from torch.optim import AdamW
+from torch.optim.lr_scheduler import LambdaLR
 import torch.nn.functional as F
 
 from .utils import system_prompt, user_message_template1, user_message_template2, user_message_template3
@@ -115,6 +117,7 @@ class ARCSolver:
     def __init__(
         self, 
         token=None,
+        enable_gradient_checkpointing=False,
         sep_str="\n",
     ):
         """
@@ -123,6 +126,7 @@ class ARCSolver:
         """
         config_path = "artifacts/config/config.yml"
         model_id = "Qwen/Qwen3-4B"
+        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
         # Configure the BitsAndBytes settings for 4-bit quantization to reduce memory usage
         bnb_config = BitsAndBytesConfig(
@@ -140,7 +144,13 @@ class ARCSolver:
             use_cache=False, # Disable caching to save memory
             device_map='cuda:0', # Automatically map the model to available devices (e.g., GPUs)
             token=token
-        )
+        ).to(self.device)
+        
+        if enable_gradient_checkpointing:
+            self.model.gradient_checkpointing_enable()
+            self.model.config.use_cache = False
+            if hasattr(self.model, "enable_input_require_grads"):
+                self.model.enable_input_require_grads()
 
         self.tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(model_id, token=token)
 
@@ -149,9 +159,7 @@ class ARCSolver:
         ]
         self.sep_str = sep_str
         self.sep_token = self.tokenizer.encode(self.sep_str, add_special_tokens=False)[0]
-        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         
-
     def parse_grid(self, ids: List[int]) -> Grid:
         """
         Parse LLM generated sequence into ARC grid format
@@ -261,6 +269,18 @@ class ARCSolver:
             "input": test_input_grid,
             "train": train_examples,
         }
+        
+    def dynamic_collate(self, batch: List[dict]) -> dict:
+        input_ids = [item["input_ids"] for item in batch]
+        output_ids = [item["target_ids"] for item in batch]
+        
+        padded_input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id)
+        padded_output_ids = torch.nn.utils.rnn.pad_sequence(output_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id)
+        
+        return {
+            "input_ids": padded_input_ids,
+            "target_ids": padded_output_ids,
+        }
 
     def seq2seq_loss(self, prompt_ids: torch.LongTensor, target_ids: torch.LongTensor) -> torch.Tensor:
         """
@@ -274,59 +294,76 @@ class ARCSolver:
         """
         
         eos = self.tokenizer.eos_token_id
+        batch_size = target_ids.size(0)
         
         if not torch.all(target_ids[:, -1] == eos):
-            eos_tensor = torch.full((target_ids.size(0), 1), eos, dtype=target_ids.dtype, device=target_ids.device)
-            target_ids = torch.cat([target_ids, eos_tensor], dim=1)
+            eos_col = torch.full((batch_size, 1), eos, dtype=target_ids.dtype, device=target_ids.device)
+            target_ids = torch.cat([target_ids, eos_col], dim=1)
         
         inp = torch.cat([prompt_ids, target_ids], dim=1)
         
+        attn_mask = inp.ne(self.tokenizer.pad_token_id).long()
+        
         labels = inp.clone()
         labels[:, : prompt_ids.size(1)] = -100
+        labels[inp == self.tokenizer.pad_token_id] = -100
 
-        
-        outputs = self.model(input_ids=inp, labels=labels)
+        outputs = self.model(input_ids=inp, labels=labels, attention_mask=attn_mask)
         return outputs.loss
 
     def train(
         self, 
         train_dataset: ARCDataset,
-        epochs: int = 5,
+        num_epochs: int = 5,
         learning_rate: float = 5e-5,
         gradient_accumulation_steps: int = 4,
+        batch_size: int = 2,
+        warmup_rate: float = 0.1,
+        resume_from: str = None,
     ):
         """
         Train a model with train_dataset.
         """
-        # Set the model to training mode
-        self.model.train()
+
 
         
         # LoRA 설정 - Attention 모듈에 적용
         peft_config = LoraConfig(
             task_type="CAUSAL_LM",
             inference_mode=False,
-            r=8,  # LoRA 행렬의 랭크
-            lora_alpha=32,  # LoRA 스케일링 파라미터
+            r=16, 
+            lora_alpha=32,  
             lora_dropout=0.1,
-            # Qwen2 모델의 트랜스포머 주요 가중치 타겟팅
             target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
         )
         
-        # 모델에 LoRA 적용
         self.model = get_peft_model(self.model, peft_config)
-        self.model.print_trainable_parameters()  # 학습 가능한 파라미터 비율 출력
+        self.model.print_trainable_parameters()
 
-        dataloader = DataLoader(train_dataset, batch_size=1, shuffle=True)
+        def dyn_collate_fn(batch):
+            return self.dynamic_collate(batch)
+        dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, pin_memory=True, collate_fn=dyn_collate_fn)
 
         optimizer  = AdamW(self.model.parameters(), lr=learning_rate)
         
-        # 메모리 효율성을 위한 그래디언트 누적 설정
+        # warmup scheduler
+        total_steps = num_epochs * len(dataloader)
+        warmup_steps = int(total_steps * warmup_rate)
+        scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps, num_training_steps=total_steps)
+        
+        start_epoch = 0
+        global_step = 0
+        
+        if resume_from:
+            start_epoch, global_step = self.load_checkpoint(resume_from, optimizer, scheduler)
+            print(f"Resuming from epoch {start_epoch}, global step {global_step}")
+            
         
         # Training loop
-        global_step = 0
+        self.model.train()
+        
         start_time = time.time()
-        for epoch in range(epochs):
+        for epoch in range(num_epochs):
             running = 0.0
             optimizer.zero_grad() 
             
@@ -367,15 +404,56 @@ class ARCSolver:
         
         end_time = time.time()
         print(f"Training completed in {end_time - start_time:.2f} seconds")
+    
+    def load_checkpoint(self, checkpoint_path: str, optimizer: AdamW, scheduler: LambdaLR) -> tuple:
+        self.model = PeftModel.from_pretrained(self.model, checkpoint_path, is_trainable=True).to(self.device)
+        opt_path = os.path.join(checkpoint_path, "optimizer.pth")
+        if optimizer is not None and os.path.isfile(opt_path):
+            optimizer.load_state_dict(torch.load(opt_path, map_location=self.device))
+        scheduler_path = os.path.join(checkpoint_path, "scheduler.pth")
+        if scheduler is not None and os.path.isfile(scheduler_path):
+            scheduler.load_state_dict(torch.load(scheduler_path, map_location=self.device))
         
-    def save_model(self, data_path: str = None):
+        state_path = os.path.join(checkpoint_path, "training_state.json")
+        start_epoch = 0
+        start_global_step = 0
+        if os.path.isfile(state_path):
+            with open(state_path, "r") as f:
+                state = json.load(f)
+                start_epoch = state.get("epoch", 0)
+                start_global_step = state.get("global_step", 0)
+        return start_epoch, start_global_step
+        
+    def save_model(
+        self, 
+        data_path: str = None,
+        optimizer: AdamW = None,
+        scheduler: LambdaLR = None,
+        epoch: int = None,
+        global_step: int = None,
+    ):
         if data_path is None:
-            data_path = "artifacts/checkpoint-final_tmp"
+            data_path = "artifacts/checkpoint-final-default"
         os.makedirs(data_path, exist_ok=True)
         self.model.save_pretrained(data_path)
+        
+        if optimizer is not None:
+            torch.save(optimizer.state_dict(), os.path.join(data_path, "optimizer.pth"))
+        if scheduler is not None:
+            torch.save(scheduler.state_dict(), os.path.join(data_path, "scheduler.pth"))
+            
+        state = dict()
+        if epoch is not None:
+            state["epoch"] = epoch
+        if global_step is not None:
+            state["global_step"] = global_step
+        if state:
+            with open(os.path.join(data_path, "training_state.json"), "w") as f:
+                json.dump(state, f, indent=2)
+        
         model_info = {
             'base_model': {
-                'name': self.model.config._name_or_path,
+                'base': self.model.config._name_or_path,
                 'type': self.model.config.model_type,
                 'hidden_size': int(self.model.config.hidden_size),
                 'vocab_size': int(self.tokenizer.vocab_size)
@@ -431,12 +509,12 @@ class ARCSolver:
             max_new_tokens=150,
             do_sample=True,   
         )
-
-        output = self.model.generate(
-            input_ids=input_ids,
-            generation_config=config,
-            attention_mask=attn_mask,
-        ).squeeze().cpu()
+        with torch.no_grad():
+            output = self.model.generate(
+                input_ids=input_ids,
+                generation_config=config,
+                attention_mask=attn_mask,
+            ).squeeze().cpu()
         N_prompt = input_ids.size(1)
 
         output = output[N_prompt:].tolist()

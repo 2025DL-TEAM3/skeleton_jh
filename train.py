@@ -15,8 +15,10 @@ def main():
     print("Loading dataset...")
     dataset = ARCDataset(args.dataset, solver=solver)
     
+    print(solver.tokenizer.bos_token_id)
+    
     print("Starting training...")
-    solver.train(dataset, epochs=3)
+    # solver.train(dataset, num_epochs=3)
     
     print("Training completed!")
     

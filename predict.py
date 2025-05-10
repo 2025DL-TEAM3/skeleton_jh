@@ -81,7 +81,7 @@ def visualize_example(task_id, test_input, ground_truth, prediction):
 
 def evaluate(args):
     solver = ARCSolver(token=args.token)
-    solver.prepare_evaluation(checkpoint_path="artifacts/checkpoint-1")
+    solver.prepare_evaluation(checkpoint_path=args.checkpoint_path)
     
     dataset = ARCDataset(args.dataset, solver=solver)
     all_tasks = dataset.all_tasks
@@ -158,8 +158,9 @@ def evaluate(args):
         print(f"Average Cell Accuracy: {avg_cell_accuracy:.4f}")
         
         os.makedirs("results", exist_ok=True)
-        with open("results/evaluation_results.json", "w") as f:
+        with open(f"{args.output_dir}/{args.output_file}", "w") as f:
             json.dump({
+                "model_checkpoint": args.checkpoint_path,
                 "num_examples": len(results),
                 "average_accuracy": avg_accuracy,
                 "average_shape_accuracy": avg_shape_accuracy,
@@ -167,9 +168,20 @@ def evaluate(args):
                 "results": results
             }, f, indent=4)
         
-        print("Results saved to results/evaluation_results.json")
+        print(f"Results saved to {args.output_dir}/{args.output_file}")
     else:
         print("No valid results to save.")
+    
+def print_args(args):
+    print("--- Arguments ---")
+    print(f"Token: {args.token}")
+    print(f"Dataset Path: {args.dataset}")
+    print(f"Number of examples: {args.num_examples}")
+    print(f"Visualize: {args.visualize}")
+    print(f"Checkpoint path: {args.checkpoint_path}")
+    print(f"Output directory: {args.output_dir}")
+    print(f"Output file: {args.output_file}")
+        
 def main():
     parser = argparse.ArgumentParser(description='Evaluate ARCSolver on ARC dataset')
     parser.add_argument('--token', type=str, default=None, help='HuggingFace token')
@@ -179,8 +191,15 @@ def main():
                         help='Number of examples to evaluate')
     parser.add_argument('--visualize', action='store_true', 
                         help='Visualize predictions')
+    parser.add_argument('--checkpoint_path', type=str, default="artifacts/checkpoint-final", 
+                        help='Path to the checkpoint file')
+    parser.add_argument('--output_dir', type=str, default="results",
+                        help='Directory to save the results')
+    parser.add_argument('--output_file', type=str, default="evaluation_results.json",
+                        help='File name to save the results')
     args = parser.parse_args()
 
+    print_args(args)
     evaluate(args)
 
 if __name__ == "__main__":
