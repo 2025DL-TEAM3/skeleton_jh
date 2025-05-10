@@ -20,6 +20,7 @@ from transformers import (
 from peft import get_peft_model, LoraConfig, PeftModel, PeftConfig, PeftMixedModel
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
+from torch.amp import autocast, GradScaler
 import torch.nn.functional as F
 
 from .utils import system_prompt, user_message_template1, user_message_template2, user_message_template3
@@ -35,6 +36,7 @@ class CustomLMHead(torch.nn.Module):
         
         old_weights = old_lm_head.weight.data.clone()
         dtype = old_weights.dtype
+        print(f"old_lm_head dtype: {dtype}")
         hidden_size = old_weights.size(1)
         
         self.vocab_size = len(allowed_token_ids)
@@ -48,7 +50,8 @@ class CustomLMHead(torch.nn.Module):
             self.linear.weight.data[new_id] = old_weights[old_id]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.linear(x)
+        out = self.linear(x)
+        return out
 
 class ARCDataset(Dataset):
     def __init__(
@@ -348,8 +351,8 @@ class ARCSolver:
         input_ids = [item["input_ids"] for item in batch]
         target_ids = [item["target_ids"] for item in batch]
         
-        padded_input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id)
-        padded_target_ids = torch.nn.utils.rnn.pad_sequence(target_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id)
+        padded_input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id, padding_side="left")
+        padded_target_ids = torch.nn.utils.rnn.pad_sequence(target_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id, padding_side="left")
         
         return {
             "input_ids": padded_input_ids,
@@ -412,15 +415,6 @@ class ARCSolver:
             for name, param in self.model.named_parameters():
                 if not ('lm_head' in name):
                     param.requires_grad = False
-        
-                
-        # print(f"Num of trainable parameters: {sum(p.numel() for p in self.model.parameters() if p.requires_grad)}")
-        # freeze_everything_but_custom_head()
-        # print("Base model frozen")
-        # print(f"Num of trainable parameters: {sum(p.numel() for p in self.model.parameters() if p.requires_grad)}")
-        # self.set_peft_model(self.model)
-        # print("Base model unfrozen")
-        # print(f"Num of trainable parameters: {sum(p.numel() for p in self.model.parameters() if p.requires_grad)}")
 
         dataloader = DataLoader(
             train_dataset, 
@@ -447,9 +441,10 @@ class ARCSolver:
             f"trainable params: {num_trainable_params:,d} || all params: {num_all_params:,d} || trainable%: {100 * num_trainable_params / num_all_params:.4f}"
         )
         if phase1_epochs > 0:
+            # scaler = GradScaler()
             head_optimizer = AdamW(
                 filter(lambda p: p.requires_grad, self.model.parameters()),
-                lr = learning_rate * 10
+                lr = learning_rate
             )
             total_steps1 = phase1_epochs * len(dataloader) / gradient_accumulation_steps
             head_scheduler = get_linear_schedule_with_warmup(
@@ -465,13 +460,18 @@ class ARCSolver:
                     input_ids = batch["input_ids"].to(self.device)
                     target_ids = batch["target_ids"].to(self.device)
 
+                    # with autocast(device_type="cuda"):
                     loss = self.seq2seq_loss(input_ids, target_ids) / gradient_accumulation_steps
+                    # scaler.scale(loss).backward()
                     loss.backward()
-
+                    
                     if global_step % gradient_accumulation_steps == 0:
+                        # scaler.unscale_(head_optimizer)
                         torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                        # scaler.step(head_optimizer)
                         head_optimizer.step()
                         head_scheduler.step()
+                        # scaler.update()
                         head_optimizer.zero_grad()
 
                     running += loss.item()
