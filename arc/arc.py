@@ -117,6 +117,7 @@ class ARCSolver:
     def __init__(
         self, 
         token=None,
+        checkpoint_save_path=None,
         enable_gradient_checkpointing=False,
         sep_str="\n",
     ):
@@ -127,6 +128,8 @@ class ARCSolver:
         config_path = "artifacts/config/config.yml"
         model_id = "Qwen/Qwen3-4B"
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        
+        self.checkpoint_save_path = checkpoint_save_path if checkpoint_save_path else "artifacts/default"
 
         # Configure the BitsAndBytes settings for 4-bit quantization to reduce memory usage
         bnb_config = BitsAndBytesConfig(
@@ -319,13 +322,11 @@ class ARCSolver:
         gradient_accumulation_steps: int = 4,
         batch_size: int = 2,
         warmup_rate: float = 0.1,
-        resume_from: str = None,
+        checkpoint_name_to_resume_from: str = None,
     ):
         """
         Train a model with train_dataset.
         """
-
-
         
         # LoRA 설정 - Attention 모듈에 적용
         peft_config = LoraConfig(
@@ -354,8 +355,8 @@ class ARCSolver:
         start_epoch = 0
         global_step = 0
         
-        if resume_from:
-            start_epoch, global_step = self.load_checkpoint(resume_from, optimizer, scheduler)
+        if checkpoint_name_to_resume_from:
+            start_epoch, global_step = self.load_checkpoint(checkpoint_name_to_resume_from, optimizer, scheduler)
             print(f"Resuming from epoch {start_epoch}, global step {global_step}")
             
         
@@ -394,22 +395,25 @@ class ARCSolver:
             # 에포크 종료 시 평균 손실 출력
             print(f"Epoch {epoch+1} avg-loss {(running/len(dataloader)):.4f}")
             print(f"Saving model for epoch {epoch+1}...")
-            self.save_model(f"artifacts/checkpoint-{epoch+1}")
+            self.save_model(checkpoint_name=f"checkpoint-{epoch+1}")
             
             intermediate_time = time.time()
             print(f"Epoch {epoch+1} completed in {intermediate_time - start_time:.2f} seconds")
 
-        self.save_model("artifacts/checkpoint-final")
+        self.save_model(checkpoint_name="checkpoint-final")
         self.model.eval()  # Set model back to evaluation mode
         
         end_time = time.time()
         print(f"Training completed in {end_time - start_time:.2f} seconds")
     
-    def load_checkpoint(self, checkpoint_path: str, optimizer: AdamW, scheduler: LambdaLR) -> tuple:
+    def load_checkpoint(self, checkpoint_name: str, optimizer: AdamW, scheduler: LambdaLR) -> tuple:
+        checkpoint_path = os.path.join(self.checkpoint_save_path, checkpoint_name)
         self.model = PeftModel.from_pretrained(self.model, checkpoint_path, is_trainable=True).to(self.device)
+        
         opt_path = os.path.join(checkpoint_path, "optimizer.pth")
         if optimizer is not None and os.path.isfile(opt_path):
             optimizer.load_state_dict(torch.load(opt_path, map_location=self.device))
+        
         scheduler_path = os.path.join(checkpoint_path, "scheduler.pth")
         if scheduler is not None and os.path.isfile(scheduler_path):
             scheduler.load_state_dict(torch.load(scheduler_path, map_location=self.device))
@@ -426,21 +430,20 @@ class ARCSolver:
         
     def save_model(
         self, 
-        data_path: str = None,
+        checkpoint_name: str = "checkpoint-final-default",
         optimizer: AdamW = None,
         scheduler: LambdaLR = None,
         epoch: int = None,
         global_step: int = None,
     ):
-        if data_path is None:
-            data_path = "artifacts/checkpoint-final-default"
-        os.makedirs(data_path, exist_ok=True)
-        self.model.save_pretrained(data_path)
+        checkpoint_path = os.path.join(self.checkpoint_save_path, checkpoint_name)
+        os.makedirs(checkpoint_path, exist_ok=True)
+        self.model.save_pretrained(checkpoint_path)
         
         if optimizer is not None:
-            torch.save(optimizer.state_dict(), os.path.join(data_path, "optimizer.pth"))
+            torch.save(optimizer.state_dict(), os.path.join(checkpoint_path, "optimizer.pth"))
         if scheduler is not None:
-            torch.save(scheduler.state_dict(), os.path.join(data_path, "scheduler.pth"))
+            torch.save(scheduler.state_dict(), os.path.join(checkpoint_path, "scheduler.pth"))
             
         state = dict()
         if epoch is not None:
@@ -448,7 +451,7 @@ class ARCSolver:
         if global_step is not None:
             state["global_step"] = global_step
         if state:
-            with open(os.path.join(data_path, "training_state.json"), "w") as f:
+            with open(os.path.join(checkpoint_path, "training_state.json"), "w") as f:
                 json.dump(state, f, indent=2)
         
         model_info = {
@@ -459,7 +462,7 @@ class ARCSolver:
                 'vocab_size': int(self.tokenizer.vocab_size)
             }
         }
-        with open(os.path.join(data_path,"model_config.json"), "w") as f: 
+        with open(os.path.join(checkpoint_path,"model_config.json"), "w") as f: 
             json.dump(model_info, f, indent=2)
 
     def predict(self, examples: List[ExampleDict], questions_input: Grid) -> Grid:
@@ -542,11 +545,13 @@ class ARCSolver:
 
     def prepare_evaluation(
         self,
-        checkpoint_path: str = "artifacts/checkpoint-final",
+        checkpoint_name: str = "checkpoint-final-default",
     ):
         """
         Load pretrained weight, make model eval mode, etc.
         """
+        checkpoint_path = os.path.join(self.checkpoint_save_path, checkpoint_name)
+        
         # LoRA 어댑터 로드
         try:
             peft_config = PeftConfig.from_pretrained(checkpoint_path)
