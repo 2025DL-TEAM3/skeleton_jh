@@ -81,7 +81,7 @@ def visualize_example(task_id, test_input, ground_truth, prediction):
 
 def evaluate(args):
     solver = ARCSolver(token=args.token)
-    solver.prepare_evaluation(checkpoint_path=args.checkpoint_path)
+    solver.prepare_evaluation(checkpoint_name=args.checkpoint_name)
     
     dataset = ARCDataset(args.dataset, solver=solver)
     all_tasks = dataset.all_tasks
@@ -160,7 +160,7 @@ def evaluate(args):
         os.makedirs("results", exist_ok=True)
         with open(f"{args.output_dir}/{args.output_file}", "w") as f:
             json.dump({
-                "model_checkpoint": args.checkpoint_path,
+                "model_checkpoint": args.checkpoint_name,
                 "num_examples": len(results),
                 "average_accuracy": avg_accuracy,
                 "average_shape_accuracy": avg_shape_accuracy,
@@ -178,7 +178,7 @@ def print_args(args):
     print(f"Dataset Path: {args.dataset}")
     print(f"Number of examples: {args.num_examples}")
     print(f"Visualize: {args.visualize}")
-    print(f"Checkpoint path: {args.checkpoint_path}")
+    print(f"Checkpoint path: {args.checkpoint_name}")
     print(f"Output directory: {args.output_dir}")
     print(f"Output file: {args.output_file}")
         
@@ -191,7 +191,7 @@ def main():
                         help='Number of examples to evaluate')
     parser.add_argument('--visualize', action='store_true', 
                         help='Visualize predictions')
-    parser.add_argument('--checkpoint_path', type=str, default="artifacts/checkpoint-final", 
+    parser.add_argument('--checkpoint_name', type=str, default="checkpoint-final", 
                         help='Path to the checkpoint file')
     parser.add_argument('--output_dir', type=str, default="results",
                         help='Directory to save the results')

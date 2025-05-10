@@ -25,6 +25,31 @@ import torch.nn.functional as F
 from .utils import system_prompt, user_message_template1, user_message_template2, user_message_template3
 from .datatypes import *
 
+class CustomLMHead(torch.nn.Module):
+    def __init__(
+        self,
+        old_lm_head: torch.nn.Module,
+        allowed_token_ids: List[int],
+    ):
+        super().__init__()
+        
+        old_weights = old_lm_head.weight.data.clone()
+        dtype = old_weights.dtype
+        hidden_size = old_weights.size(1)
+        
+        self.vocab_size = len(allowed_token_ids)
+        self.linear = torch.nn.Linear(hidden_size, self.vocab_size, bias=False, dtype=dtype)
+        
+        print(f"old_lm_head weight shape: {old_weights.shape}")
+        print(f"new_lm_head weight shape: {self.linear.weight.shape}")
+        print(f"allowed_token_ids: {allowed_token_ids}")
+        
+        for new_id, old_id in enumerate(allowed_token_ids):
+            self.linear.weight.data[new_id] = old_weights[old_id]
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.linear(x)
+
 class ARCDataset(Dataset):
     def __init__(
         self, 
@@ -82,7 +107,7 @@ class ARCDataset(Dataset):
         examples = task["examples"]
         
         # select self.num_samples_per_task examples
-        sampled_examples = random.choice(examples, self.num_samples_per_task)
+        sampled_examples = random.sample(examples, self.num_samples_per_task)
         
         train_examples = sampled_examples[:self.num_samples_per_task - 1]
         test_example = sampled_examples[self.num_samples_per_task - 1]
@@ -178,6 +203,7 @@ class ARCSolver:
         if cache_dir:
             tokenizer_args["cache_dir"] = cache_dir
         self.tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(**tokenizer_args)
+        self.tokenizer.bos_token_id = 151643 # Default for Qwen3
 
         self.pixel_ids = [
             self.tokenizer.encode(str(i), add_special_tokens=False)[0] for i in range(10)
@@ -185,6 +211,27 @@ class ARCSolver:
         
         self.sep_str = sep_str
         self.sep_token = self.tokenizer.encode(self.sep_str, add_special_tokens=False)[0]
+        
+        #### Custom LM Head
+        self.special_tokens = [
+            self.tokenizer.pad_token_id,
+            self.tokenizer.eos_token_id,
+            self.tokenizer.bos_token_id,
+            self.sep_token,
+        ]
+        self.allowed_token_ids = list(dict.fromkeys(self.pixel_ids + self.special_tokens))
+        self.vocab_size = len(self.allowed_token_ids)
+        
+        # print(f"Weight tied: {torch.allclose(self.model.get_input_embeddings().weight, self.model.lm_head.weight)}") # True for Qwen3
+        old_lm_head = self.model.lm_head
+        new_head = CustomLMHead(old_lm_head=old_lm_head, allowed_token_ids=self.allowed_token_ids).to(self.device)
+        self.model.lm_head = new_head
+        self.model.config.vocab_size = self.vocab_size
+        self.original_to_custom = {
+            old_id: new_id 
+            for new_id, old_id in enumerate(self.allowed_token_ids)
+        }
+        
         
     def parse_grid(self, ids: List[int]) -> Grid:
         """
@@ -319,21 +366,20 @@ class ARCSolver:
         ------------------------------------------
         model(input_ids=inp, labels=labels)  →  .loss
         """
-        
-        print(prompt_ids[:, -50:])
-        print(target_ids[:, -50:])
-        
+
         inp = torch.cat([prompt_ids, target_ids], dim=1)
-        
         attn_mask = inp.ne(self.tokenizer.pad_token_id).long()
         
         labels = inp.clone()
         labels[:, : prompt_ids.size(1)] = -100
         labels[inp == self.tokenizer.pad_token_id] = -100
         
-        print(labels[:, -50:])
+        # custom labels
+        custom_labels = torch.full_like(labels, -100)
+        for old_id, new_id in self.original_to_custom.items():
+            custom_labels[labels == old_id] = new_id
 
-        outputs = self.model(input_ids=inp, labels=labels, attention_mask=attn_mask)
+        outputs = self.model(input_ids=inp, labels=custom_labels, attention_mask=attn_mask)
         return outputs.loss
 
     def train(
@@ -541,21 +587,25 @@ class ARCSolver:
         # Qwen3 모델은 더 많은 토큰을 생성할 수 있도록 설정
         config = GenerationConfig(
             temperature=0.7, top_p=0.8, top_k=20,    # 권장 값
-            bos_token_id=151643,  # Qwen3 모델의 내부 기본값 명시적 사용
+            bos_token_id=self.tokenizer.bos_token_id,
             eos_token_id=self.tokenizer.eos_token_id,
             pad_token_id=self.tokenizer.pad_token_id,
             max_new_tokens=150,
             do_sample=True,   
         )
         with torch.no_grad():
-            output = self.model.generate(
+            custom_ids = self.model.generate(
                 input_ids=input_ids,
                 generation_config=config,
                 attention_mask=attn_mask,
             ).squeeze(0).cpu()
+            
+            
         N_prompt = input_ids.size(1)
-
-        output = output[N_prompt:].tolist()
+        custom_ids = custom_ids[N_prompt:].tolist() # generated portion
+        
+        output = [ self.allowed_token_ids[i] for i in custom_ids ]
+        
         prompt = self.format_prompt(datapoint)
         train_input = np.array(prompt['train'][0]['input'])
         train_output = np.array(prompt['train'][0]['output'])
