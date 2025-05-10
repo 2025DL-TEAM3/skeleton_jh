@@ -149,6 +149,7 @@ class ARCSolver:
             "device_map": "auto",  # Automatically map the model to available devices (e.g., GPUs)
         }
         cache_dir = os.getenv("TRANSFORMERS_CACHE")
+        print("Cache dir:", cache_dir)
         if cache_dir:
             print(f"Using cache dir: {cache_dir}")
             model_args["cache_dir"] = cache_dir
