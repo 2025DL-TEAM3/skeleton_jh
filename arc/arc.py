@@ -381,6 +381,17 @@ class ARCSolver:
 
         outputs = self.model(input_ids=inp, labels=custom_labels, attention_mask=attn_mask)
         return outputs.loss
+    
+    def set_peft_model(self):
+        peft_config = LoraConfig(
+            task_type="CAUSAL_LM",
+            inference_mode=False,
+            r=8, 
+            lora_alpha=32,  
+            lora_dropout=0.1,
+            target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        )
+        self.model = get_peft_model(self.model, peft_config)
 
     def train(
         self, 
@@ -391,34 +402,25 @@ class ARCSolver:
         batch_size: int = 2,
         warmup_rate: float = 0.1,
         checkpoint_name_to_resume_from: str = None,
-        num_epochs_for_custom_lm_head: int = 2,
+        num_epochs_for_custom_lm_head: int = 0,
     ):
         """
         Train a model with train_dataset.
         """
 
-        
-        # LoRA 설정 - Attention 모듈에 적용
-        peft_config = LoraConfig(
-            task_type="CAUSAL_LM",
-            inference_mode=False,
-            r=8, 
-            lora_alpha=32,  
-            lora_dropout=0.1,
-            target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
-        )
-        
-        self.model = get_peft_model(self.model, peft_config)
-        self.model.print_trainable_parameters()
-                
-        def freeze_base_model():
+        def freeze_everything_but_custom_head():
             for name, param in self.model.named_parameters():
-                if not ('lm_head' in name or 'lora' in name):
+                if not ('lm_head' in name):
                     param.requires_grad = False
         
-        def unfreeze_base_model():
-            for name, param in self.model.named_parameters():
-                param.requires_grad = True
+                
+        # print(f"Num of trainable parameters: {sum(p.numel() for p in self.model.parameters() if p.requires_grad)}")
+        # freeze_everything_but_custom_head()
+        # print("Base model frozen")
+        # print(f"Num of trainable parameters: {sum(p.numel() for p in self.model.parameters() if p.requires_grad)}")
+        # self.set_peft_model(self.model)
+        # print("Base model unfrozen")
+        # print(f"Num of trainable parameters: {sum(p.numel() for p in self.model.parameters() if p.requires_grad)}")
 
         dataloader = DataLoader(
             train_dataset, 
@@ -437,10 +439,14 @@ class ARCSolver:
         ### Phase 1: Train custom LM head
         phase1_start_time = time.time()
         phase1_epochs = min(num_epochs, num_epochs_for_custom_lm_head)
+        print(f"Phase 1: Training custom LM head for {phase1_epochs} epochs...")
+        freeze_everything_but_custom_head()
+        num_trainable_params = self.model.num_parameters(only_trainable=True)
+        num_all_params = self.model.num_parameters()
+        print(
+            f"trainable params: {num_trainable_params:,d} || all params: {num_all_params:,d} || trainable%: {100 * num_trainable_params / num_all_params:.4f}"
+        )
         if phase1_epochs > 0:
-            print(f"Phase 1: Training custom LM head for {phase1_epochs} epochs...")
-            freeze_base_model()
-            
             head_optimizer = AdamW(
                 filter(lambda p: p.requires_grad, self.model.parameters()),
                 lr = learning_rate * 10
@@ -477,18 +483,16 @@ class ARCSolver:
                 print(f"Epoch {epoch+1} completed in {epoch_time - prev_epoch_time:.2f} seconds")
                 prev_epoch_time = epoch_time
 
-            phase1_end_time = time.time()
-            print(f"Phase 1 completed in {phase1_end_time - phase1_start_time:.2f} seconds")
-        
-        # done head-only
-        unfreeze_base_model()
-        start_epoch = phase1_epochs
-        print("Backbone unfrozen; moving to Phase 2")
-        
+        phase1_end_time = time.time()
+        print(f"Phase 1 completed in {phase1_end_time - phase1_start_time:.2f} seconds")
+
         ### Phase 2: Train full model
+        start_epoch = phase1_epochs
         phase2_start_time = time.time()
+        print(f"Phase 2: Fine-tuning Lora adapters for epochs {start_epoch+1} to {num_epochs}")
+        self.set_peft_model()
+        self.model.print_trainable_parameters()
         if start_epoch < num_epochs:
-            print(f"Phase 2: Fine-tuning full model for epochs {start_epoch+1} to {num_epochs}")
             
             full_optimizer = AdamW(self.model.parameters(), lr=learning_rate)
             total_steps2 = (num_epochs - start_epoch) * len(dataloader) / gradient_accumulation_steps

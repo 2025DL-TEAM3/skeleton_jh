@@ -32,6 +32,7 @@ def main():
         dataset,
         num_epochs=5,
         batch_size=2,
+        num_epochs_for_custom_lm_head=2,
     )
     
     print("Training completed!")
