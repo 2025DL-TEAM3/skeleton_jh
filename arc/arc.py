@@ -441,7 +441,9 @@ class ARCSolver:
             f"trainable params: {num_trainable_params:,d} || all params: {num_all_params:,d} || trainable%: {100 * num_trainable_params / num_all_params:.4f}"
         )
         if phase1_epochs > 0:
-            # scaler = GradScaler()
+            scaler = GradScaler()
+            self.model.lm_head.float() # TODO: better way
+            
             head_optimizer = AdamW(
                 filter(lambda p: p.requires_grad, self.model.parameters()),
                 lr = learning_rate
@@ -460,18 +462,18 @@ class ARCSolver:
                     input_ids = batch["input_ids"].to(self.device)
                     target_ids = batch["target_ids"].to(self.device)
 
-                    # with autocast(device_type="cuda"):
-                    loss = self.seq2seq_loss(input_ids, target_ids) / gradient_accumulation_steps
-                    # scaler.scale(loss).backward()
-                    loss.backward()
+                    with autocast(device_type="cuda"):
+                        loss = self.seq2seq_loss(input_ids, target_ids) / gradient_accumulation_steps
+                    scaler.scale(loss).backward()
+                    # loss.backward()
                     
                     if global_step % gradient_accumulation_steps == 0:
-                        # scaler.unscale_(head_optimizer)
+                        scaler.unscale_(head_optimizer)
                         torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-                        # scaler.step(head_optimizer)
-                        head_optimizer.step()
+                        scaler.step(head_optimizer)
+                        # head_optimizer.step()
                         head_scheduler.step()
-                        # scaler.update()
+                        scaler.update()
                         head_optimizer.zero_grad()
 
                     running += loss.item()
@@ -483,8 +485,18 @@ class ARCSolver:
                 print(f"Epoch {epoch+1} completed in {epoch_time - prev_epoch_time:.2f} seconds")
                 prev_epoch_time = epoch_time
 
+            self.model.lm_head.half()
+
         phase1_end_time = time.time()
         print(f"Phase 1 completed in {phase1_end_time - phase1_start_time:.2f} seconds")
+
+        self.save_model(
+            checkpoint_name="checkpoint-head-final",
+            optimizer=None,
+            scheduler=None,
+            start_epoch=phase1_epochs,
+            global_step=global_step,
+        )
 
         ### Phase 2: Train full model
         start_epoch = phase1_epochs

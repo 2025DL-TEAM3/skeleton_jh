@@ -17,7 +17,7 @@ def main():
     ##############
     
     print("Initializing model...")
-    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     checkpoint_save_path = f"{artifacts_dir}/train-{now}"
     solver = ARCSolver(
         token=args.token,
@@ -30,9 +30,9 @@ def main():
     print("Starting training...")
     solver.train(
         dataset,
-        num_epochs=5,
+        num_epochs=7,
         batch_size=2,
-        num_epochs_for_custom_lm_head=2,
+        num_epochs_for_custom_lm_head=3,
     )
     
     print("Training completed!")
