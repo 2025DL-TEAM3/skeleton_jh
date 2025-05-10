@@ -332,7 +332,7 @@ class ARCSolver:
         peft_config = LoraConfig(
             task_type="CAUSAL_LM",
             inference_mode=False,
-            r=16, 
+            r=8, 
             lora_alpha=32,  
             lora_dropout=0.1,
             target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],

@@ -17,8 +17,8 @@ def main():
     ##############
     
     print("Initializing model...")
-    today = datetime.datetime.today().strftime("%Y-%m-%d")
-    checkpoint_save_path = f"{artifacts_dir}/train-{today}"
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    checkpoint_save_path = f"{artifacts_dir}/train-{now}"
     solver = ARCSolver(
         token=args.token,
         checkpoint_save_path=checkpoint_save_path,
@@ -26,9 +26,7 @@ def main():
     
     print("Loading dataset...")
     dataset = ARCDataset(args.dataset, solver=solver)
-    
-    print(solver.tokenizer.bos_token_id)
-    
+        
     print("Starting training...")
     solver.train(
         dataset,
