@@ -146,13 +146,15 @@ class ARCSolver:
             "attn_implementation": "sdpa",  # Use scaled-dot product attention for better performance
             "torch_dtype": torch.float16,  # Set the data type for the model
             "use_cache": False,  # Disable caching to save memory
-            "device_map": "auto",  # Automatically map the model to available devices (e.g., GPUs)
+            "device_map": "cuda:0",  # Automatically map the model to available devices (e.g., GPUs)
+            "token": token,
         }
         cache_dir = os.getenv("TRANSFORMERS_CACHE")
-        print("Cache dir:", cache_dir)
         if cache_dir:
             print(f"Using cache dir: {cache_dir}")
             model_args["cache_dir"] = cache_dir
+        else:
+            print("No cache dir found, using default cache location.")
         
         self.model: Union[PreTrainedModel, PeftModel, PeftMixedModel] = AutoModelForCausalLM.from_pretrained(
             **model_args,
@@ -170,11 +172,12 @@ class ARCSolver:
         }
         if cache_dir:
             tokenizer_args["cache_dir"] = cache_dir
-        self.tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(model_id, token=token)
+        self.tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(**tokenizer_args)
 
         self.pixel_ids = [
             self.tokenizer.encode(str(i), add_special_tokens=False)[0] for i in range(10)
         ]
+        
         self.sep_str = sep_str
         self.sep_token = self.tokenizer.encode(self.sep_str, add_special_tokens=False)[0]
         
@@ -389,7 +392,7 @@ class ARCSolver:
                 input_ids = batch["input_ids"].to(self.device)
                 target_ids = batch["target_ids"].to(self.device)
                 
-                loss = self.seq2seq_loss(input_ids, target_ids)
+                loss = self.seq2seq_loss(input_ids, target_ids) / gradient_accumulation_steps
 
                 # 역전파
                 loss.backward()
@@ -398,14 +401,15 @@ class ARCSolver:
                 if global_step % gradient_accumulation_steps == 0:
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
                     optimizer.step()
+                    scheduler.step()
                     optimizer.zero_grad()
                 
                 # 손실 기록
-                running += loss.item() * gradient_accumulation_steps
+                running += loss.item()
                 
                 # 로그 출력
                 if step % 10 == 0:
-                    print(f"[E{epoch+1}] step {step} loss {loss.item()*gradient_accumulation_steps:.4f}")
+                    print(f"[E{epoch+1}] step {step} loss {loss.item():.4f}")
                     
             # 에포크 종료 시 평균 손실 출력
             print(f"Epoch {epoch+1} avg-loss {(running/len(dataloader)):.4f}")

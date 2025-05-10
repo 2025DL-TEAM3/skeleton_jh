@@ -31,6 +31,7 @@ def main():
     solver.train(
         dataset,
         num_epochs=5,
+        batch_size=2,
     )
     
     print("Training completed!")
