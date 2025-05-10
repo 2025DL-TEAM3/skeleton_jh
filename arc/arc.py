@@ -138,15 +138,22 @@ class ARCSolver:
             bnb_4bit_quant_type="nf4",  # Specify the quantization type
             bnb_4bit_compute_dtype=torch.float16,  # Set the computation data type
         )
+        
+        model_args = {
+            "model_id": model_id,
+            "trust_remote_code": True,  # Allow the model to use custom code from the repository
+            "quantization_config": bnb_config,  # Apply the 4-bit quantization configuration
+            "attn_implementation": "sdpa",  # Use scaled-dot product attention for better performance
+            "torch_dtype": torch.float16,  # Set the data type for the model
+            "use_cache": False,  # Disable caching to save memory
+            "device_map": "auto",  # Automatically map the model to available devices (e.g., GPUs)
+        }
+        cache_dir = os.getenv("TRANSFORMERS_CACHE")
+        if cache_dir:
+            model_args["cache_dir"] = cache_dir
+        
         self.model: Union[PreTrainedModel, PeftModel, PeftMixedModel] = AutoModelForCausalLM.from_pretrained(
-            model_id,
-            trust_remote_code=True, # Allow the model to use custom code from the repository
-            quantization_config=bnb_config, # Apply the 4-bit quantization configuration
-            attn_implementation='sdpa', # Use scaled-dot product attention for better performance
-            torch_dtype=torch.float16, # Set the data type for the model
-            use_cache=False, # Disable caching to save memory
-            device_map='cuda:0', # Automatically map the model to available devices (e.g., GPUs)
-            token=token
+            **model_args,
         ).to(self.device)
         
         if enable_gradient_checkpointing:
