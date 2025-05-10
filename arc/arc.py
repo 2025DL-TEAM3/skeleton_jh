@@ -358,12 +358,16 @@ class ARCSolver:
             print(f"Epoch {epoch+1} avg-loss {(running/len(dataloader)):.4f}")
             print(f"Saving model for epoch {epoch+1}...")
             self.save_model(f"artifacts/checkpoint-{epoch+1}")
-        end_time = time.time()
-        print(f"Training completed in {end_time - start_time:.2f} seconds")
+            
+            intermediate_time = time.time()
+            print(f"Epoch {epoch+1} completed in {intermediate_time - start_time:.2f} seconds")
 
         self.save_model("artifacts/checkpoint-final")
         self.model.eval()  # Set model back to evaluation mode
-    
+        
+        end_time = time.time()
+        print(f"Training completed in {end_time - start_time:.2f} seconds")
+        
     def save_model(self, data_path: str = None):
         if data_path is None:
             data_path = "artifacts/checkpoint-final_tmp"
