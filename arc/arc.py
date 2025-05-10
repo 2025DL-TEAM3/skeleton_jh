@@ -150,6 +150,7 @@ class ARCSolver:
         }
         cache_dir = os.getenv("TRANSFORMERS_CACHE")
         if cache_dir:
+            print(f"Using cache dir: {cache_dir}")
             model_args["cache_dir"] = cache_dir
         
         self.model: Union[PreTrainedModel, PeftModel, PeftMixedModel] = AutoModelForCausalLM.from_pretrained(
