@@ -1,4 +1,4 @@
-import os, glob, json
+import os, glob, json, time
 
 from transformers import GenerationConfig
 import torch
@@ -175,6 +175,7 @@ class ARCSolver:
                 row.append(inv_map.get(idx, 0))
         return grid
 
+    # TODO: is col_sep needed?
     def format_grid(self, grid: Grid) -> List[int]:
         """
         Format 2D grid into LLM input tokens
@@ -203,11 +204,10 @@ class ARCSolver:
                 ]
         Returns:
             str: String representation of the grid
-                1 2 
-                3 4
-        
+                12 
+                34
         """
-        return self.sep_str.join(" ".join(str(c) for c in row) for row in grid)
+        return self.sep_str.join("".join(str(c) for c in row) for row in grid)
 
     def format_prompt(self, datapoint: DataPointDict) -> FormattedPrompt:
         """
@@ -288,9 +288,13 @@ class ARCSolver:
         outputs = self.model(input_ids=inp, labels=labels)
         return outputs.loss
 
-
-
-    def train(self, train_dataset: ARCDataset):
+    def train(
+        self, 
+        train_dataset: ARCDataset,
+        epochs: int = 5,
+        learning_rate: float = 5e-5,
+        gradient_accumulation_steps: int = 4,
+    ):
         """
         Train a model with train_dataset.
         """
@@ -315,14 +319,13 @@ class ARCSolver:
 
         dataloader = DataLoader(train_dataset, batch_size=1, shuffle=True)
 
-        optimizer  = AdamW(self.model.parameters(), lr=5e-5)
+        optimizer  = AdamW(self.model.parameters(), lr=learning_rate)
         
         # 메모리 효율성을 위한 그래디언트 누적 설정
-        gradient_accumulation_steps = 4
         
         # Training loop
-        epochs = 5
         global_step = 0
+        start_time = time.time()
         for epoch in range(epochs):
             running = 0.0
             optimizer.zero_grad() 
@@ -350,13 +353,13 @@ class ARCSolver:
                 # 로그 출력
                 if step % 10 == 0:
                     print(f"[E{epoch+1}] step {step} loss {loss.item()*gradient_accumulation_steps:.4f}")
-                
-                if global_step % 100 == 0:
-                    print("Saving checkpoint...")
-                    self.save_model()
                     
             # 에포크 종료 시 평균 손실 출력
             print(f"Epoch {epoch+1} avg-loss {(running/len(dataloader)):.4f}")
+            print(f"Saving model for epoch {epoch+1}...")
+            self.save_model(f"artifacts/checkpoint-{epoch+1}")
+        end_time = time.time()
+        print(f"Training completed in {end_time - start_time:.2f} seconds")
 
         self.save_model("artifacts/checkpoint-final")
         self.model.eval()  # Set model back to evaluation mode

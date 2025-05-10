@@ -16,7 +16,7 @@ def main():
     dataset = ARCDataset(args.dataset, solver=solver)
     
     print("Starting training...")
-    # solver.train(dataset)
+    solver.train(dataset, epochs=3)
     
     print("Training completed!")
     
