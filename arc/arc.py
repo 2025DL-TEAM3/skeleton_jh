@@ -458,16 +458,19 @@ class ARCSolver:
 
         return grid
 
-    def prepare_evaluation(self):
+    def prepare_evaluation(
+        self,
+        checkpoint_path: str = "artifacts/checkpoint-final",
+    ):
         """
         Load pretrained weight, make model eval mode, etc.
         """
         # LoRA 어댑터 로드
         try:
-            peft_config = PeftConfig.from_pretrained("artifacts/checkpoint-final")
+            peft_config = PeftConfig.from_pretrained(checkpoint_path)
             self.model = PeftModel.from_pretrained(
                 self.model,
-                "artifacts/checkpoint-final",
+                checkpoint_path,
                 is_trainable=False
             )
             print("Loaded LoRA adapter")
