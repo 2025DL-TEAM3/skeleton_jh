@@ -9,10 +9,17 @@ def main():
     parser.add_argument('--dataset', type=str, default=f"{WORDKSPACE}/dataset", help='Dataset path')
     args = parser.parse_args()
     
-    # solver = ARCSolver(token=args.token)
+    print("Initializing model...")
+    solver = ARCSolver(token=args.token)
     
-    dataset = ARCDataset(args.dataset)
-    print(dataset[0])
+    print("Loading dataset...")
+    dataset = ARCDataset(args.dataset, solver=solver)
+    
+    print("Starting training...")
+    # solver.train(dataset)
+    
+    print("Training completed!")
+    
     
 if __name__ == "__main__":
     main()
