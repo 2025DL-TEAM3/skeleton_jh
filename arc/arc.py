@@ -1,4 +1,4 @@
-import os, glob, json, time
+import os, glob, json, time, random
 
 from transformers import GenerationConfig
 import torch
@@ -23,7 +23,7 @@ from torch.optim.lr_scheduler import LambdaLR
 import torch.nn.functional as F
 
 from .utils import system_prompt, user_message_template1, user_message_template2, user_message_template3
-from .type import *
+from .datatypes import *
 
 class ARCDataset(Dataset):
     def __init__(
@@ -78,11 +78,11 @@ class ARCDataset(Dataset):
         return self.total_num_steps
     
     def __getitem__(self, idx):
-        task = np.random.choice(self.all_tasks)
+        task = random.choice(self.all_tasks)
         examples = task["examples"]
         
         # select self.num_samples_per_task examples
-        sampled_examples = np.random.choice(examples, self.num_samples_per_task, replace=False)
+        sampled_examples = random.choice(examples, self.num_samples_per_task)
         
         train_examples = sampled_examples[:self.num_samples_per_task - 1]
         test_example = sampled_examples[self.num_samples_per_task - 1]
@@ -102,6 +102,11 @@ class ARCDataset(Dataset):
         target_ids = torch.tensor(
             self.solver.format_grid(test_example["output"]), dtype=torch.long
         )
+        
+        # concat eos
+        eos = self.solver.tokenizer.eos_token_id
+        if target_ids[-1] != eos:
+            target_ids = torch.cat([target_ids, torch.tensor([eos], dtype=torch.long, device=target_ids.device)])
         
         # Note: it might raise runtime error if they are variable length
         return {
@@ -146,8 +151,8 @@ class ARCSolver:
             "attn_implementation": "sdpa",  # Use scaled-dot product attention for better performance
             "torch_dtype": torch.float16,  # Set the data type for the model
             "use_cache": False,  # Disable caching to save memory
-            "device_map": "cuda:0",  # Automatically map the model to available devices (e.g., GPUs)
             "token": token,
+            "device_map": "auto",  # Automatically map the model to available devices
         }
         cache_dir = os.getenv("TRANSFORMERS_CACHE")
         if cache_dir:
@@ -158,7 +163,7 @@ class ARCSolver:
         
         self.model: Union[PreTrainedModel, PeftModel, PeftMixedModel] = AutoModelForCausalLM.from_pretrained(
             **model_args,
-        ).to(self.device)
+        )
         
         if enable_gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
@@ -202,6 +207,8 @@ class ARCSolver:
                     row.clear()
             else:
                 row.append(inv_map.get(idx, 0))
+        if len(row) > 0:
+            grid.append(row)
         return grid
 
     # TODO: is col_sep needed?
@@ -262,17 +269,16 @@ class ARCSolver:
         for ex in train_examples:
             msg += (
                 f"input:\n{self.grid_to_str(ex['input'])}\n"
-                f"output:\n{self.grid_to_str(ex['output'])}"
+                f"output:\n{self.grid_to_str(ex['output'])}\n"
             )
-        messages.append({"role": "user", "content": msg})
 
         test_msg = (
-            f"{user_message_template2}\n"
+            f"\n{user_message_template2}\n"
+            f"{user_message_template3}\n"
             f"input:\n{self.grid_to_str(test_input_grid)}\n"
-            f"{user_message_template3}"
         )
-        messages.append({"role": "user", "content": test_msg})
-        
+        messages.append({"role": "user", "content": msg + test_msg})
+
         # type: torch.Tensor
         input_ids = self.tokenizer.apply_chat_template(
             messages,
@@ -293,14 +299,14 @@ class ARCSolver:
         
     def dynamic_collate(self, batch: List[dict]) -> dict:
         input_ids = [item["input_ids"] for item in batch]
-        output_ids = [item["target_ids"] for item in batch]
+        target_ids = [item["target_ids"] for item in batch]
         
         padded_input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id)
-        padded_output_ids = torch.nn.utils.rnn.pad_sequence(output_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id)
+        padded_target_ids = torch.nn.utils.rnn.pad_sequence(target_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id)
         
         return {
             "input_ids": padded_input_ids,
-            "target_ids": padded_output_ids,
+            "target_ids": padded_target_ids,
         }
 
     def seq2seq_loss(self, prompt_ids: torch.LongTensor, target_ids: torch.LongTensor) -> torch.Tensor:
@@ -314,12 +320,8 @@ class ARCSolver:
         model(input_ids=inp, labels=labels)  →  .loss
         """
         
-        eos = self.tokenizer.eos_token_id
-        batch_size = target_ids.size(0)
-        
-        if not torch.all(target_ids[:, -1] == eos):
-            eos_col = torch.full((batch_size, 1), eos, dtype=target_ids.dtype, device=target_ids.device)
-            target_ids = torch.cat([target_ids, eos_col], dim=1)
+        print(prompt_ids[:, -50:])
+        print(target_ids[:, -50:])
         
         inp = torch.cat([prompt_ids, target_ids], dim=1)
         
@@ -328,6 +330,8 @@ class ARCSolver:
         labels = inp.clone()
         labels[:, : prompt_ids.size(1)] = -100
         labels[inp == self.tokenizer.pad_token_id] = -100
+        
+        print(labels[:, -50:])
 
         outputs = self.model(input_ids=inp, labels=labels, attention_mask=attn_mask)
         return outputs.loss
@@ -366,7 +370,7 @@ class ARCSolver:
         optimizer  = AdamW(self.model.parameters(), lr=learning_rate)
         
         # warmup scheduler
-        total_steps = num_epochs * len(dataloader)
+        total_steps = num_epochs * len(dataloader) / gradient_accumulation_steps # divide to match step count for scheduler
         warmup_steps = int(total_steps * warmup_rate)
         scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps, num_training_steps=total_steps)
         
@@ -382,7 +386,7 @@ class ARCSolver:
         self.model.train()
         
         start_time = time.time()
-        for epoch in range(num_epochs):
+        for epoch in range(start_epoch, num_epochs):
             running = 0.0
             optimizer.zero_grad() 
             
@@ -414,12 +418,24 @@ class ARCSolver:
             # 에포크 종료 시 평균 손실 출력
             print(f"Epoch {epoch+1} avg-loss {(running/len(dataloader)):.4f}")
             print(f"Saving model for epoch {epoch+1}...")
-            self.save_model(checkpoint_name=f"checkpoint-{epoch+1}")
+            self.save_model(
+                checkpoint_name=f"checkpoint-{epoch+1}",
+                optimizer=optimizer,
+                scheduler=scheduler,
+                start_epoch=epoch+1,
+                global_step=global_step, 
+            )
             
             intermediate_time = time.time()
             print(f"Epoch {epoch+1} completed in {intermediate_time - start_time:.2f} seconds")
 
-        self.save_model(checkpoint_name="checkpoint-final")
+        self.save_model(
+            checkpoint_name="checkpoint-final",
+            optimizer=optimizer,
+            scheduler=scheduler,
+            start_epoch=num_epochs,
+            global_step=global_step,
+        )
         self.model.eval()  # Set model back to evaluation mode
         
         end_time = time.time()
@@ -443,7 +459,7 @@ class ARCSolver:
         if os.path.isfile(state_path):
             with open(state_path, "r") as f:
                 state = json.load(f)
-                start_epoch = state.get("epoch", 0)
+                start_epoch = state.get("start_epoch", 0)
                 start_global_step = state.get("global_step", 0)
         return start_epoch, start_global_step
         
@@ -452,7 +468,7 @@ class ARCSolver:
         checkpoint_name: str = "checkpoint-final-default",
         optimizer: AdamW = None,
         scheduler: LambdaLR = None,
-        epoch: int = None,
+        start_epoch: int = None,
         global_step: int = None,
     ):
         checkpoint_path = os.path.join(self.checkpoint_save_path, checkpoint_name)
@@ -465,8 +481,8 @@ class ARCSolver:
             torch.save(scheduler.state_dict(), os.path.join(checkpoint_path, "scheduler.pth"))
             
         state = dict()
-        if epoch is not None:
-            state["epoch"] = epoch
+        if start_epoch is not None:
+            state["start_epoch"] = start_epoch
         if global_step is not None:
             state["global_step"] = global_step
         if state:
@@ -536,7 +552,7 @@ class ARCSolver:
                 input_ids=input_ids,
                 generation_config=config,
                 attention_mask=attn_mask,
-            ).squeeze().cpu()
+            ).squeeze(0).cpu()
         N_prompt = input_ids.size(1)
 
         output = output[N_prompt:].tolist()
