@@ -1,0 +1,8 @@
+torch
+torchvision
+transformers
+datasets
+peft
+matplotlib
+scikit-learn
+bitsandbytes
