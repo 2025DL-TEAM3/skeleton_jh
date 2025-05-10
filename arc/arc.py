@@ -140,7 +140,7 @@ class ARCSolver:
         )
         
         model_args = {
-            "model_id": model_id,
+            "pretrained_model_name_or_path": model_id,
             "trust_remote_code": True,  # Allow the model to use custom code from the repository
             "quantization_config": bnb_config,  # Apply the 4-bit quantization configuration
             "attn_implementation": "sdpa",  # Use scaled-dot product attention for better performance
@@ -163,6 +163,12 @@ class ARCSolver:
             if hasattr(self.model, "enable_input_require_grads"):
                 self.model.enable_input_require_grads()
 
+        tokenizer_args = {
+            "pretrained_model_name_or_path": model_id,
+            "token": token,
+        }
+        if cache_dir:
+            tokenizer_args["cache_dir"] = cache_dir
         self.tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(model_id, token=token)
 
         self.pixel_ids = [
