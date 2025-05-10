@@ -391,10 +391,12 @@ class ARCSolver:
         batch_size: int = 2,
         warmup_rate: float = 0.1,
         checkpoint_name_to_resume_from: str = None,
+        num_epochs_for_custom_lm_head: int = 2,
     ):
         """
         Train a model with train_dataset.
         """
+
         
         # LoRA 설정 - Attention 모듈에 적용
         peft_config = LoraConfig(
@@ -408,84 +410,140 @@ class ARCSolver:
         
         self.model = get_peft_model(self.model, peft_config)
         self.model.print_trainable_parameters()
-
-        def dyn_collate_fn(batch):
-            return self.dynamic_collate(batch)
-        dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, pin_memory=True, collate_fn=dyn_collate_fn)
-
-        optimizer  = AdamW(self.model.parameters(), lr=learning_rate)
+                
+        def freeze_base_model():
+            for name, param in self.model.named_parameters():
+                if not ('lm_head' in name or 'lora' in name):
+                    param.requires_grad = False
         
-        # warmup scheduler
-        total_steps = num_epochs * len(dataloader) / gradient_accumulation_steps # divide to match step count for scheduler
-        warmup_steps = int(total_steps * warmup_rate)
-        scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps, num_training_steps=total_steps)
+        def unfreeze_base_model():
+            for name, param in self.model.named_parameters():
+                param.requires_grad = True
+
+        dataloader = DataLoader(
+            train_dataset, 
+            batch_size=batch_size, 
+            shuffle=True, 
+            pin_memory=True, 
+            collate_fn=lambda b: self.dynamic_collate(b),
+        )
         
         start_epoch = 0
         global_step = 0
-        
         if checkpoint_name_to_resume_from:
-            start_epoch, global_step = self.load_checkpoint(checkpoint_name_to_resume_from, optimizer, scheduler)
+            start_epoch, global_step = self.load_checkpoint(checkpoint_name_to_resume_from, None, None)
             print(f"Resuming from epoch {start_epoch}, global step {global_step}")
-            
         
-        # Training loop
-        self.model.train()
-        
-        start_time = time.time()
-        for epoch in range(start_epoch, num_epochs):
-            running = 0.0
-            optimizer.zero_grad() 
+        ### Phase 1: Train custom LM head
+        phase1_start_time = time.time()
+        phase1_epochs = min(num_epochs, num_epochs_for_custom_lm_head)
+        if phase1_epochs > 0:
+            print(f"Phase 1: Training custom LM head for {phase1_epochs} epochs...")
+            freeze_base_model()
             
-            for step, batch in enumerate(dataloader):
-                global_step += 1
-                
-                input_ids = batch["input_ids"].to(self.device)
-                target_ids = batch["target_ids"].to(self.device)
-                
-                loss = self.seq2seq_loss(input_ids, target_ids) / gradient_accumulation_steps
-
-                # 역전파
-                loss.backward()
-                
-                # 그래디언트 누적 후 최적화
-                if global_step % gradient_accumulation_steps == 0:
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-                    optimizer.step()
-                    scheduler.step()
-                    optimizer.zero_grad()
-                
-                # 손실 기록
-                running += loss.item()
-                
-                # 로그 출력
-                if step % 10 == 0:
-                    print(f"[E{epoch+1}] step {step} loss {loss.item():.4f}")
-                    
-            # 에포크 종료 시 평균 손실 출력
-            print(f"Epoch {epoch+1} avg-loss {(running/len(dataloader)):.4f}")
-            print(f"Saving model for epoch {epoch+1}...")
-            self.save_model(
-                checkpoint_name=f"checkpoint-{epoch+1}",
-                optimizer=optimizer,
-                scheduler=scheduler,
-                start_epoch=epoch+1,
-                global_step=global_step, 
+            head_optimizer = AdamW(
+                filter(lambda p: p.requires_grad, self.model.parameters()),
+                lr = learning_rate * 10
             )
-            
-            intermediate_time = time.time()
-            print(f"Epoch {epoch+1} completed in {intermediate_time - start_time:.2f} seconds")
+            total_steps1 = phase1_epochs * len(dataloader) / gradient_accumulation_steps
+            head_scheduler = get_linear_schedule_with_warmup(
+                head_optimizer, num_warmup_steps=int(total_steps1 * warmup_rate), num_training_steps=total_steps1
+            )
+        
+            prev_epoch_time = time.time()
+            for epoch in range(start_epoch, phase1_epochs):
+                head_optimizer.zero_grad()
+                running = 0.0
+                for step, batch in enumerate(dataloader):
+                    global_step += 1
+                    input_ids = batch["input_ids"].to(self.device)
+                    target_ids = batch["target_ids"].to(self.device)
 
+                    loss = self.seq2seq_loss(input_ids, target_ids) / gradient_accumulation_steps
+                    loss.backward()
+
+                    if global_step % gradient_accumulation_steps == 0:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                        head_optimizer.step()
+                        head_scheduler.step()
+                        head_optimizer.zero_grad()
+
+                    running += loss.item()
+                    if step % 10 == 0:
+                        print(f"[Head E{epoch+1}] step {step} loss {loss.item():.4f}")
+
+                print(f"[Head E{epoch+1}] avg-loss {running/len(dataloader):.4f}")
+                epoch_time = time.time()
+                print(f"Epoch {epoch+1} completed in {epoch_time - prev_epoch_time:.2f} seconds")
+                prev_epoch_time = epoch_time
+
+            phase1_end_time = time.time()
+            print(f"Phase 1 completed in {phase1_end_time - phase1_start_time:.2f} seconds")
+        
+        # done head-only
+        unfreeze_base_model()
+        start_epoch = phase1_epochs
+        print("Backbone unfrozen; moving to Phase 2")
+        
+        ### Phase 2: Train full model
+        phase2_start_time = time.time()
+        if start_epoch < num_epochs:
+            print(f"Phase 2: Fine-tuning full model for epochs {start_epoch+1} to {num_epochs}")
+            
+            full_optimizer = AdamW(self.model.parameters(), lr=learning_rate)
+            total_steps2 = (num_epochs - start_epoch) * len(dataloader) / gradient_accumulation_steps
+            full_scheduler = get_linear_schedule_with_warmup(
+                full_optimizer,
+                num_warmup_steps=int(total_steps2 * warmup_rate),
+                num_training_steps=total_steps2,
+            )
+
+            prev_epoch_time = time.time()
+            for epoch in range(start_epoch, num_epochs):
+                full_optimizer.zero_grad()
+                running = 0.0
+                for step, batch in enumerate(dataloader):
+                    global_step += 1
+                    input_ids = batch["input_ids"].to(self.device)
+                    target_ids = batch["target_ids"].to(self.device)
+
+                    loss = self.seq2seq_loss(input_ids, target_ids) / gradient_accumulation_steps
+                    loss.backward()
+
+                    if global_step % gradient_accumulation_steps == 0:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                        full_optimizer.step()
+                        full_scheduler.step()
+                        full_optimizer.zero_grad()
+
+                    running += loss.item()
+                    if step % 10 == 0:
+                        print(f"[FT E{epoch+1}] step {step} loss {loss.item():.4f}")
+
+                print(f"[FT E{epoch+1}] avg-loss {running/len(dataloader):.4f}")
+                self.save_model(
+                    checkpoint_name=f"checkpoint-{epoch+1}",
+                    optimizer=full_optimizer,
+                    scheduler=full_scheduler,
+                    start_epoch=epoch+1,
+                    global_step=global_step,
+                )
+                
+                epoch_time = time.time()
+                print(f"Epoch {epoch+1} completed in {epoch_time - prev_epoch_time:.2f} seconds")
+                prev_epoch_time = epoch_time
+        
         self.save_model(
             checkpoint_name="checkpoint-final",
-            optimizer=optimizer,
-            scheduler=scheduler,
+            optimizer=full_optimizer if start_epoch < num_epochs else head_optimizer,
+            scheduler=full_scheduler if start_epoch < num_epochs else head_scheduler,
             start_epoch=num_epochs,
             global_step=global_step,
         )
-        self.model.eval()  # Set model back to evaluation mode
-        
-        end_time = time.time()
-        print(f"Training completed in {end_time - start_time:.2f} seconds")
+        self.model.eval()
+        phase2_end_time = time.time()
+        print(f"Phase 2 completed in {phase2_end_time - phase2_start_time:.2f} seconds")
+        print(f"Training completed in {phase2_end_time - phase1_start_time:.2f} seconds")
     
     def load_checkpoint(self, checkpoint_name: str, optimizer: AdamW, scheduler: LambdaLR) -> tuple:
         checkpoint_path = os.path.join(self.checkpoint_save_path, checkpoint_name)
