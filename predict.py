@@ -197,7 +197,7 @@ def main():
                         help='Number of examples to evaluate')
     parser.add_argument('--visualize', action='store_true', 
                         help='Visualize predictions')
-    parser.add_argument('--checkpoint_name', type=str, default="train-2025-05-11-01-56-25/checkpoint-final", 
+    parser.add_argument('--checkpoint_name', type=str, default="checkpoint-final", 
                         help='Path to the checkpoint file')
     parser.add_argument('--output_dir', type=str, default="results",
                         help='Directory to save the results')

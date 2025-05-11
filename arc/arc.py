@@ -499,6 +499,49 @@ class ARCSolver:
         }
         with open(os.path.join(checkpoint_path,"model_config.json"), "w") as f: 
             json.dump(model_info, f, indent=2)
+    
+    def test_time_training(self, examples: List[ExampleDict], num_epochs: int = 1):
+        self.model.train()
+
+        optimizer = AdamW(self.model.parameters(), lr=5e-5)
+        
+        original_examples = examples.copy()
+        
+        for epoch in range(num_epochs):
+            running = 0.0
+            for i, curernt_train_on_example in enumerate(original_examples):
+                few_shot_examples = [
+                    ex for idx, ex in enumerate(original_examples) if idx != i
+                ]
+                
+                test_input = curernt_train_on_example["input"]
+                
+                ttt_datapoint: DataPointDict = {
+                    "train": few_shot_examples,
+                    "test": [
+                        {
+                            "input": test_input,
+                        }
+                    ]
+                }
+
+                input_ids = self.datapoint_to_input(ttt_datapoint, keep_batch_dim=False).to(self.device)
+                
+                target_ids = torch.tensor(
+                    self.format_grid(curernt_train_on_example["output"]), dtype=torch.long
+                ).to(self.device)
+                
+                input_ids = input_ids.unsqueeze(0)
+                target_ids = target_ids.unsqueeze(0)
+                
+                optimizer.zero_grad()
+                loss = self.seq2seq_loss(input_ids, target_ids)
+                loss.backward()
+                optimizer.step()
+                running += loss.item()
+        
+        self.model.eval()
+            
 
     def predict(self, examples: List[ExampleDict], questions_input: Grid) -> Grid:
         """
@@ -525,6 +568,8 @@ class ARCSolver:
             output (Grid): A 2d grid,
                 which is the output of given input question.
         """
+        self.test_time_training(examples)
+        
         datapoint: DataPointDict = {
             "train": examples,
             "test": [
@@ -596,7 +641,7 @@ class ARCSolver:
             self.model = PeftModel.from_pretrained(
                 self.model,
                 checkpoint_path,
-                is_trainable=False
+                is_trainable=True,
             )
             print("Loaded LoRA adapter")
         except Exception as e:
