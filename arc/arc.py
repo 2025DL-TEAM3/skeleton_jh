@@ -583,7 +583,7 @@ class ARCSolver:
 
     def prepare_evaluation(
         self,
-        checkpoint_name: str = "checkpoint-final-default",
+        checkpoint_name: str = "checkpoint-final",
     ):
         """
         Load pretrained weight, make model eval mode, etc.
