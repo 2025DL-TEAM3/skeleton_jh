@@ -9,7 +9,7 @@ import glob
 import json
 import random
 
-WORKSPACE = "/home/top321902/code/intro_dl/term_project"
+WORKSPACE = os.getenv("INTRODL2025_WORKSPACE", "/home/top321902/code/intro_dl/term_project")
 
 def shape_accuracy(prediction, ground_truth):
     """

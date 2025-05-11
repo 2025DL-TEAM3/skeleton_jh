@@ -1,8 +1,8 @@
-import argparse
+import argparse, os
 import datetime
 from arc import ARCSolver, ARCDataset
 
-WORKSPACE = '/home/top321902/code/intro_dl/term_project'
+WORKSPACE = os.getenv("INTRODL2025_WORKSPACE", "/home/top321902/code/intro_dl/term_project")
 
 def main():
     parser = argparse.ArgumentParser(description='Train ARCSolver with ARC dataset')
@@ -12,7 +12,7 @@ def main():
     
     ##############
     # TODO: change to arguments
-    artifacts_dir = f"artifacts"
+    artifacts_dir = f"{WORKSPACE}/skeleton/artifacts"
     
     ##############
     

@@ -40,7 +40,7 @@ class CustomLMHead(torch.nn.Module):
         hidden_size = old_weights.size(1)
         
         self.vocab_size = len(allowed_token_ids)
-        self.linear = torch.nn.Linear(hidden_size, self.vocab_size, bias=False, dtype=dtype)
+        self.linear = torch.nn.Linear(hidden_size, self.vocab_size, bias=False).float()
         
         print(f"old_lm_head weight shape: {old_weights.shape}")
         print(f"new_lm_head weight shape: {self.linear.weight.shape}")
@@ -74,7 +74,6 @@ class ARCDataset(Dataset):
         self.num_samples_per_task = num_samples_per_task
         self.num_steps_per_task = num_steps_per_task
         self.total_num_steps = len(self.all_tasks) * num_steps_per_task
-        print(f"Total number of steps: {self.total_num_steps}")
     
     def load_dataset(self):
         json_file_paths = glob.glob(f"{self.dataset_path}/*.json")
@@ -442,7 +441,6 @@ class ARCSolver:
         )
         if phase1_epochs > 0:
             scaler = GradScaler()
-            self.model.lm_head.float() # TODO: better way
             
             head_optimizer = AdamW(
                 filter(lambda p: p.requires_grad, self.model.parameters()),
@@ -455,7 +453,6 @@ class ARCSolver:
         
             prev_epoch_time = time.time()
             for epoch in range(start_epoch, phase1_epochs):
-                head_optimizer.zero_grad()
                 running = 0.0
                 for step, batch in enumerate(dataloader):
                     global_step += 1
@@ -481,11 +478,17 @@ class ARCSolver:
                         print(f"[Head E{epoch+1}] step {step} loss {loss.item():.4f}")
 
                 print(f"[Head E{epoch+1}] avg-loss {running/len(dataloader):.4f}")
+                self.save_model(
+                    checkpoint_name=f"checkpoint-head-{epoch+1}",
+                    optimizer=head_optimizer,
+                    scheduler=head_scheduler,
+                    start_epoch=epoch+1,
+                    global_step=global_step,
+                )
+                
                 epoch_time = time.time()
                 print(f"Epoch {epoch+1} completed in {epoch_time - prev_epoch_time:.2f} seconds")
                 prev_epoch_time = epoch_time
-
-            self.model.lm_head.half()
 
         phase1_end_time = time.time()
         print(f"Phase 1 completed in {phase1_end_time - phase1_start_time:.2f} seconds")
@@ -505,6 +508,7 @@ class ARCSolver:
         self.set_peft_model()
         self.model.print_trainable_parameters()
         if start_epoch < num_epochs:
+            scaler = GradScaler()
             
             full_optimizer = AdamW(self.model.parameters(), lr=learning_rate)
             total_steps2 = (num_epochs - start_epoch) * len(dataloader) / gradient_accumulation_steps
@@ -516,20 +520,24 @@ class ARCSolver:
 
             prev_epoch_time = time.time()
             for epoch in range(start_epoch, num_epochs):
-                full_optimizer.zero_grad()
                 running = 0.0
                 for step, batch in enumerate(dataloader):
                     global_step += 1
                     input_ids = batch["input_ids"].to(self.device)
                     target_ids = batch["target_ids"].to(self.device)
 
-                    loss = self.seq2seq_loss(input_ids, target_ids) / gradient_accumulation_steps
-                    loss.backward()
+                    with autocast(device_type="cuda"):
+                        loss = self.seq2seq_loss(input_ids, target_ids) / gradient_accumulation_steps
+                    scaler.scale(loss).backward()
+                    # loss.backward()
 
                     if global_step % gradient_accumulation_steps == 0:
+                        scaler.unscale_(full_optimizer)
                         torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-                        full_optimizer.step()
+                        scaler.step(full_optimizer)
+                        # full_optimizer.step()
                         full_scheduler.step()
+                        scaler.update()
                         full_optimizer.zero_grad()
 
                     running += loss.item()
@@ -551,8 +559,8 @@ class ARCSolver:
         
         self.save_model(
             checkpoint_name="checkpoint-final",
-            optimizer=full_optimizer if start_epoch < num_epochs else head_optimizer,
-            scheduler=full_scheduler if start_epoch < num_epochs else head_scheduler,
+            optimizer=full_optimizer if start_epoch < num_epochs else None,
+            scheduler=full_scheduler if start_epoch < num_epochs else None,
             start_epoch=num_epochs,
             global_step=global_step,
         )
