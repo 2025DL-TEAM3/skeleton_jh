@@ -1,9 +1,12 @@
 __pycache__
-artifacts/
+artifacts/*
 *train*.txt
 !requirements.txt
 results/
 
 # Checkpoint files
-!artifacts/train-qwen0.6b-rank8
-!artifacts/train-qwen4b-rank16
+!artifacts/train-qwen0.6b-rank8/
+!artifacts/train-qwen0.6b-rank8/checkpoint-final/
+
+!artifacts/train-qwen4b-rank16/
+!artifacts/train-qwen4b-rank16/checkpoint-final/

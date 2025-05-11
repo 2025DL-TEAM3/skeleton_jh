@@ -1,0 +1,8 @@
+{
+  "base_model": {
+    "base": "Qwen/Qwen3-0.6B-Base",
+    "type": "qwen3",
+    "hidden_size": 1024,
+    "vocab_size": 151643
+  }
+}
