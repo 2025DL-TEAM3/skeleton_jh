@@ -26,32 +26,6 @@ import torch.nn.functional as F
 from .utils import system_prompt, user_message_template1, user_message_template2, user_message_template3
 from .datatypes import *
 
-class CustomLMHead(torch.nn.Module):
-    def __init__(
-        self,
-        old_lm_head: torch.nn.Module,
-        allowed_token_ids: List[int],
-    ):
-        super().__init__()
-        
-        old_weights = old_lm_head.weight.data.clone()
-        dtype = old_weights.dtype
-        print(f"old_lm_head dtype: {dtype}")
-        hidden_size = old_weights.size(1)
-        
-        self.vocab_size = len(allowed_token_ids)
-        self.linear = torch.nn.Linear(hidden_size, self.vocab_size, bias=False).float()
-        
-        print(f"old_lm_head weight shape: {old_weights.shape}")
-        print(f"new_lm_head weight shape: {self.linear.weight.shape}")
-        
-        for new_id, old_id in enumerate(allowed_token_ids):
-            self.linear.weight.data[new_id] = old_weights[old_id]
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        out = self.linear(x)
-        return out
-
 class ARCDataset(Dataset):
     def __init__(
         self, 
@@ -213,43 +187,6 @@ class ARCSolver:
         self.sep_str = sep_str
         self.sep_token_id = self.tokenizer.encode(self.sep_str, add_special_tokens=False)[0]
         
-        #### Custom LM Head
-        self.special_tokens = [
-            self.tokenizer.pad_token_id,
-            self.tokenizer.eos_token_id,
-            self.tokenizer.bos_token_id,
-            self.sep_token_id,
-        ]
-        self.allowed_token_ids = list(dict.fromkeys(self.pixel_ids + self.special_tokens))
-        self.vocab_size = len(self.allowed_token_ids)
-        
-        # print(f"Weight tied: {torch.allclose(self.model.get_input_embeddings().weight, self.model.lm_head.weight)}") # True for Qwen3
-        old_lm_head = self.model.lm_head
-        new_head = CustomLMHead(old_lm_head=old_lm_head, allowed_token_ids=self.allowed_token_ids).to(self.device)
-        self.model.lm_head = new_head
-        self.model.config.vocab_size = self.vocab_size
-        self.original_to_custom = {
-            old_id: new_id 
-            for new_id, old_id in enumerate(self.allowed_token_ids)
-        }
-        self.custom_to_original = {
-            new_id: old_id 
-            for new_id, old_id in enumerate(self.allowed_token_ids)
-        } # actually, same as self.allowed_token_ids
-        
-        print(f"------ Token Info ------")
-        print(f"Original vocab size: {self.tokenizer.vocab_size}, Custom vocab size: {self.vocab_size}")
-        print("str: original_id -> custom_id")
-        for i in range(10):
-            str_i = str(i)
-            original_id = self.tokenizer.encode(str_i, add_special_tokens=False)[0]
-            custom_id = self.original_to_custom[original_id]
-            print(f"{str_i}: {original_id} -> {custom_id}")
-        print(f"<pad>: {self.tokenizer.pad_token_id} -> {self.original_to_custom[self.tokenizer.pad_token_id]}")
-        print(f"<eos>: {self.tokenizer.eos_token_id} -> {self.original_to_custom[self.tokenizer.eos_token_id]}")
-        print(f"<bos>: {self.tokenizer.bos_token_id} -> {self.original_to_custom[self.tokenizer.bos_token_id]}")
-        print(f"\\n   : {self.sep_token_id} -> {self.original_to_custom[self.sep_token_id]}")
-        
         
     def parse_grid(self, ids: List[int]) -> Grid:
         """
@@ -271,6 +208,8 @@ class ARCSolver:
                     grid.append(row.copy())
                     row.clear()
             else:
+                if idx == self.tokenizer.eos_token_id:
+                    break
                 row.append(inv_map.get(idx, 0))
         if len(row) > 0:
             grid.append(row)
@@ -393,14 +332,8 @@ class ARCSolver:
         labels = inp.clone()
         labels[:, : prompt_ids.size(1)] = -100
         labels[inp == self.tokenizer.pad_token_id] = -100
-        
-        # custom labels
-        custom_labels = torch.full_like(labels, -100)
-        for old_id, new_id in self.original_to_custom.items():
-            custom_labels[labels == old_id] = new_id
-        print(f"custom target_ids: {custom_labels[0, prompt_ids.size(1):].tolist()}")
 
-        outputs = self.model(input_ids=inp, labels=custom_labels, attention_mask=attn_mask)
+        outputs = self.model(input_ids=inp, labels=labels, attention_mask=attn_mask)
         return outputs.loss
     
     def set_peft_model(self):
@@ -423,16 +356,10 @@ class ARCSolver:
         batch_size: int = 2,
         warmup_rate: float = 0.1,
         checkpoint_name_to_resume_from: str = None,
-        num_epochs_for_custom_lm_head: int = 0,
     ):
         """
         Train a model with train_dataset.
         """
-
-        def freeze_everything_but_custom_head():
-            for name, param in self.model.named_parameters():
-                if not ('lm_head' in name):
-                    param.requires_grad = False
 
         dataloader = DataLoader(
             train_dataset, 
@@ -441,152 +368,79 @@ class ARCSolver:
             pin_memory=True, 
             collate_fn=lambda b: self.dynamic_collate(b),
         )
-        
+             
         start_epoch = 0
         global_step = 0
-        if checkpoint_name_to_resume_from:
-            start_epoch, global_step = self.load_checkpoint(checkpoint_name_to_resume_from, None, None)
-            print(f"Resuming from epoch {start_epoch}, global step {global_step}")
-        
-        ### Phase 1: Train custom LM head
-        phase1_start_time = time.time()
-        phase1_epochs = min(num_epochs, num_epochs_for_custom_lm_head)
-        print(f"Phase 1: Training custom LM head for {phase1_epochs} epochs...")
-        freeze_everything_but_custom_head()
-        num_trainable_params = self.model.num_parameters(only_trainable=True)
-        num_all_params = self.model.num_parameters()
-        print(
-            f"trainable params: {num_trainable_params:,d} || all params: {num_all_params:,d} || trainable%: {100 * num_trainable_params / num_all_params:.4f}"
-        )
-        if phase1_epochs > 0:
-            scaler = GradScaler()
-            
-            head_optimizer = AdamW(
-                filter(lambda p: p.requires_grad, self.model.parameters()),
-                lr = learning_rate
-            )
-            total_steps1 = phase1_epochs * len(dataloader) / gradient_accumulation_steps
-            head_scheduler = get_linear_schedule_with_warmup(
-                head_optimizer, num_warmup_steps=int(total_steps1 * warmup_rate), num_training_steps=total_steps1
-            )
-        
-            prev_epoch_time = time.time()
-            for epoch in range(start_epoch, phase1_epochs):
-                running = 0.0
-                for step, batch in enumerate(dataloader):
-                    global_step += 1
-                    input_ids = batch["input_ids"].to(self.device)
-                    target_ids = batch["target_ids"].to(self.device)
-
-                    with autocast(device_type="cuda"):
-                        loss = self.seq2seq_loss(input_ids, target_ids) / gradient_accumulation_steps
-                    scaler.scale(loss).backward()
-                    # loss.backward()
-                    
-                    if global_step % gradient_accumulation_steps == 0:
-                        scaler.unscale_(head_optimizer)
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-                        scaler.step(head_optimizer)
-                        # head_optimizer.step()
-                        head_scheduler.step()
-                        scaler.update()
-                        head_optimizer.zero_grad()
-
-                    running += loss.item()
-                    if step % 10 == 0:
-                        print(f"[Head E{epoch+1}] step {step} loss {loss.item():.4f}")
-
-                print(f"[Head E{epoch+1}] avg-loss {running/len(dataloader):.4f}")
-                self.save_model(
-                    checkpoint_name=f"checkpoint-head-{epoch+1}",
-                    optimizer=head_optimizer,
-                    scheduler=head_scheduler,
-                    start_epoch=epoch+1,
-                    global_step=global_step,
-                )
-                
-                epoch_time = time.time()
-                print(f"Epoch {epoch+1} completed in {epoch_time - prev_epoch_time:.2f} seconds")
-                prev_epoch_time = epoch_time
-
-        phase1_end_time = time.time()
-        print(f"Phase 1 completed in {phase1_end_time - phase1_start_time:.2f} seconds")
-
-        self.save_model(
-            checkpoint_name="checkpoint-head-final",
-            optimizer=None,
-            scheduler=None,
-            start_epoch=phase1_epochs,
-            global_step=global_step,
-        )
-
-        ### Phase 2: Train full model
-        start_epoch = phase1_epochs
-        phase2_start_time = time.time()
-        print(f"Phase 2: Fine-tuning Lora adapters for epochs {start_epoch+1} to {num_epochs}")
+           
+        start_time = time.time()
+        print(f"Fine-tuning Lora adapters for epochs {start_epoch+1} to {num_epochs}")
         self.set_peft_model()
         self.model.print_trainable_parameters()
-        if start_epoch < num_epochs:
-            scaler = GradScaler()
-            
-            full_optimizer = AdamW(self.model.parameters(), lr=learning_rate)
-            total_steps2 = (num_epochs - start_epoch) * len(dataloader) / gradient_accumulation_steps
-            full_scheduler = get_linear_schedule_with_warmup(
-                full_optimizer,
-                num_warmup_steps=int(total_steps2 * warmup_rate),
-                num_training_steps=total_steps2,
+        
+        total_steps = num_epochs * len(dataloader) / gradient_accumulation_steps
+        optimizer = AdamW(self.model.parameters(), lr=learning_rate)
+        scheduler = get_linear_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=int(total_steps * warmup_rate),
+            num_training_steps=total_steps,
+        )
+
+        if checkpoint_name_to_resume_from:
+            start_epoch, global_step = self.load_checkpoint(checkpoint_name_to_resume_from, optimizer, scheduler)
+            print(f"Resuming from epoch {start_epoch}, global step {global_step}")
+
+        scaler = GradScaler()
+
+        prev_epoch_time = time.time()
+        self.model.train()
+        for epoch in range(start_epoch, num_epochs):
+            running = 0.0
+            for step, batch in enumerate(dataloader):
+                global_step += 1
+                input_ids = batch["input_ids"].to(self.device)
+                target_ids = batch["target_ids"].to(self.device)
+
+                with autocast(device_type="cuda"):
+                    loss = self.seq2seq_loss(input_ids, target_ids) / gradient_accumulation_steps
+                scaler.scale(loss).backward()
+                # loss.backward()
+
+                if global_step % gradient_accumulation_steps == 0:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                    scaler.step(optimizer)
+                    # full_optimizer.step()
+                    scheduler.step()
+                    scaler.update()
+                    optimizer.zero_grad()
+
+                running += loss.item()
+                if step % 10 == 0:
+                    print(f"[FT E{epoch+1}] step {step} loss {loss.item():.4f}")
+
+            print(f"[FT E{epoch+1}] avg-loss {running/len(dataloader):.4f}")
+            self.save_model(
+                checkpoint_name=f"checkpoint-{epoch+1}",
+                optimizer=optimizer,
+                scheduler=scheduler,
+                start_epoch=epoch+1,
+                global_step=global_step,
             )
-
-            prev_epoch_time = time.time()
-            for epoch in range(start_epoch, num_epochs):
-                running = 0.0
-                for step, batch in enumerate(dataloader):
-                    global_step += 1
-                    input_ids = batch["input_ids"].to(self.device)
-                    target_ids = batch["target_ids"].to(self.device)
-
-                    with autocast(device_type="cuda"):
-                        loss = self.seq2seq_loss(input_ids, target_ids) / gradient_accumulation_steps
-                    scaler.scale(loss).backward()
-                    # loss.backward()
-
-                    if global_step % gradient_accumulation_steps == 0:
-                        scaler.unscale_(full_optimizer)
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-                        scaler.step(full_optimizer)
-                        # full_optimizer.step()
-                        full_scheduler.step()
-                        scaler.update()
-                        full_optimizer.zero_grad()
-
-                    running += loss.item()
-                    if step % 10 == 0:
-                        print(f"[FT E{epoch+1}] step {step} loss {loss.item():.4f}")
-
-                print(f"[FT E{epoch+1}] avg-loss {running/len(dataloader):.4f}")
-                self.save_model(
-                    checkpoint_name=f"checkpoint-{epoch+1}",
-                    optimizer=full_optimizer,
-                    scheduler=full_scheduler,
-                    start_epoch=epoch+1,
-                    global_step=global_step,
-                )
-                
-                epoch_time = time.time()
-                print(f"Epoch {epoch+1} completed in {epoch_time - prev_epoch_time:.2f} seconds")
-                prev_epoch_time = epoch_time
+            
+            epoch_time = time.time()
+            print(f"Epoch {epoch+1} completed in {epoch_time - prev_epoch_time:.2f} seconds")
+            prev_epoch_time = epoch_time
         
         self.save_model(
             checkpoint_name="checkpoint-final",
-            optimizer=full_optimizer if start_epoch < num_epochs else None,
-            scheduler=full_scheduler if start_epoch < num_epochs else None,
+            optimizer=optimizer,
+            scheduler=scheduler,
             start_epoch=num_epochs,
             global_step=global_step,
         )
         self.model.eval()
-        phase2_end_time = time.time()
-        print(f"Phase 2 completed in {phase2_end_time - phase2_start_time:.2f} seconds")
-        print(f"Training completed in {phase2_end_time - phase1_start_time:.2f} seconds")
+        end_time = time.time()
+        print(f"Training completed in {end_time - start_time:.2f} seconds")
     
     def load_checkpoint(self, checkpoint_name: str, optimizer: AdamW, scheduler: LambdaLR) -> tuple:
         checkpoint_path = os.path.join(self.checkpoint_save_path, checkpoint_name)
@@ -688,27 +542,24 @@ class ARCSolver:
         # Qwen3 모델은 더 많은 토큰을 생성할 수 있도록 설정
         config = GenerationConfig(
             temperature=0.7, top_p=0.8, top_k=20,    # 권장 값
-            bos_token_id=self.original_to_custom[self.tokenizer.bos_token_id],
-            eos_token_id=self.original_to_custom[self.tokenizer.eos_token_id],
-            pad_token_id=self.original_to_custom[self.tokenizer.pad_token_id],
+            bos_token_id=self.tokenizer.bos_token_id,
+            eos_token_id=self.tokenizer.eos_token_id,
+            pad_token_id=self.tokenizer.pad_token_id,
             max_new_tokens=150,
             do_sample=True,   
         )
         with torch.no_grad(), autocast(device_type="cuda"):
-            custom_ids = self.model.generate(
+            output_ids = self.model.generate(
                 input_ids=input_ids,
                 generation_config=config,
                 attention_mask=attn_mask,
             ).squeeze(0).cpu()
-            print(f"custom prediction ids: {custom_ids[input_ids.size(1):].tolist()}")
             
             
         N_prompt = input_ids.size(1)
-        custom_ids = custom_ids[N_prompt:].tolist() # generated portion
-        
-        original_ids = [ self.custom_to_original[custom_id] for custom_id in custom_ids ]
-        print(f"original prediction ids: {original_ids}")
-        print(f"original prediction text: {[self.tokenizer.decode(t) for t in original_ids]}")
+        output_ids = output_ids[N_prompt:].tolist() # generated portion
+        print(f"Prediction ids: {output_ids}")
+        print(f"Prediction text: {[self.tokenizer.decode(t) for t in output_ids]}")
         
         prompt = self.format_prompt(datapoint)
         train_input = np.array(prompt['train'][0]['input'])
@@ -724,7 +575,7 @@ class ARCSolver:
             y = (train_output.shape[1] * test_input.shape[1] // train_input.shape[1])
 
         try:
-            grid = np.array(self.parse_grid(original_ids))
+            grid = np.array(self.parse_grid(output_ids))
             print(f"parsed grid: {grid}")
             # grid = grid[:x, :y]
             
@@ -752,7 +603,6 @@ class ARCSolver:
                 is_trainable=False
             )
             print("Loaded LoRA adapter")
-            print(f"LM Head weight shape: {self.model.lm_head.linear.weight.shape}")
         except Exception as e:
             print(f"No LoRA adapter found or incompatible: {e}")
             
