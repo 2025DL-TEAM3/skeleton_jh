@@ -44,7 +44,6 @@ class CustomLMHead(torch.nn.Module):
         
         print(f"old_lm_head weight shape: {old_weights.shape}")
         print(f"new_lm_head weight shape: {self.linear.weight.shape}")
-        print(f"allowed_token_ids: {allowed_token_ids}")
         
         for new_id, old_id in enumerate(allowed_token_ids):
             self.linear.weight.data[new_id] = old_weights[old_id]
@@ -212,14 +211,14 @@ class ARCSolver:
         ]
         
         self.sep_str = sep_str
-        self.sep_token = self.tokenizer.encode(self.sep_str, add_special_tokens=False)[0]
+        self.sep_token_id = self.tokenizer.encode(self.sep_str, add_special_tokens=False)[0]
         
         #### Custom LM Head
         self.special_tokens = [
             self.tokenizer.pad_token_id,
             self.tokenizer.eos_token_id,
             self.tokenizer.bos_token_id,
-            self.sep_token,
+            self.sep_token_id,
         ]
         self.allowed_token_ids = list(dict.fromkeys(self.pixel_ids + self.special_tokens))
         self.vocab_size = len(self.allowed_token_ids)
@@ -233,6 +232,23 @@ class ARCSolver:
             old_id: new_id 
             for new_id, old_id in enumerate(self.allowed_token_ids)
         }
+        self.custom_to_original = {
+            new_id: old_id 
+            for new_id, old_id in enumerate(self.allowed_token_ids)
+        } # actually, same as self.allowed_token_ids
+        
+        print(f"------ Token Info ------")
+        print(f"Original vocab size: {self.tokenizer.vocab_size}, Custom vocab size: {self.vocab_size}")
+        print("str: original_id -> custom_id")
+        for i in range(10):
+            str_i = str(i)
+            original_id = self.tokenizer.encode(str_i, add_special_tokens=False)[0]
+            custom_id = self.original_to_custom[original_id]
+            print(f"{str_i}: {original_id} -> {custom_id}")
+        print(f"<pad>: {self.tokenizer.pad_token_id} -> {self.original_to_custom[self.tokenizer.pad_token_id]}")
+        print(f"<eos>: {self.tokenizer.eos_token_id} -> {self.original_to_custom[self.tokenizer.eos_token_id]}")
+        print(f"<bos>: {self.tokenizer.bos_token_id} -> {self.original_to_custom[self.tokenizer.bos_token_id]}")
+        print(f"\\n   : {self.sep_token_id} -> {self.original_to_custom[self.sep_token_id]}")
         
         
     def parse_grid(self, ids: List[int]) -> Grid:
@@ -250,7 +266,7 @@ class ARCSolver:
         inv_map = {k: i for i, k in enumerate(self.pixel_ids)}
         
         for idx in ids:
-            if idx == self.sep_token:
+            if idx == self.sep_token_id:
                 if len(row) > 0:
                     grid.append(row.copy())
                     row.clear()
@@ -276,7 +292,7 @@ class ARCSolver:
         for row in grid:
             for col in row:
                 ids.append(self.pixel_ids[col])
-            ids.append(self.sep_token)
+            ids.append(self.sep_token_id)
         return ids
 
     def grid_to_str(self, grid: Grid) -> str:
@@ -368,6 +384,8 @@ class ARCSolver:
         ------------------------------------------
         model(input_ids=inp, labels=labels)  →  .loss
         """
+        print(f"original target text: {[self.tokenizer.decode(t) for t in target_ids[0].tolist()]}")
+        print(f"original target_ids: {target_ids[0].tolist()}")
 
         inp = torch.cat([prompt_ids, target_ids], dim=1)
         attn_mask = inp.ne(self.tokenizer.pad_token_id).long()
@@ -380,6 +398,7 @@ class ARCSolver:
         custom_labels = torch.full_like(labels, -100)
         for old_id, new_id in self.original_to_custom.items():
             custom_labels[labels == old_id] = new_id
+        print(f"custom target_ids: {custom_labels[0, prompt_ids.size(1):].tolist()}")
 
         outputs = self.model(input_ids=inp, labels=custom_labels, attention_mask=attn_mask)
         return outputs.loss
@@ -669,24 +688,27 @@ class ARCSolver:
         # Qwen3 모델은 더 많은 토큰을 생성할 수 있도록 설정
         config = GenerationConfig(
             temperature=0.7, top_p=0.8, top_k=20,    # 권장 값
-            bos_token_id=self.tokenizer.bos_token_id,
-            eos_token_id=self.tokenizer.eos_token_id,
-            pad_token_id=self.tokenizer.pad_token_id,
+            bos_token_id=self.original_to_custom[self.tokenizer.bos_token_id],
+            eos_token_id=self.original_to_custom[self.tokenizer.eos_token_id],
+            pad_token_id=self.original_to_custom[self.tokenizer.pad_token_id],
             max_new_tokens=150,
             do_sample=True,   
         )
-        with torch.no_grad():
+        with torch.no_grad(), autocast(device_type="cuda"):
             custom_ids = self.model.generate(
                 input_ids=input_ids,
                 generation_config=config,
                 attention_mask=attn_mask,
             ).squeeze(0).cpu()
+            print(f"custom prediction ids: {custom_ids[input_ids.size(1):].tolist()}")
             
             
         N_prompt = input_ids.size(1)
         custom_ids = custom_ids[N_prompt:].tolist() # generated portion
         
-        output = [ self.allowed_token_ids[i] for i in custom_ids ]
+        original_ids = [ self.custom_to_original[custom_id] for custom_id in custom_ids ]
+        print(f"original prediction ids: {original_ids}")
+        print(f"original prediction text: {[self.tokenizer.decode(t) for t in original_ids]}")
         
         prompt = self.format_prompt(datapoint)
         train_input = np.array(prompt['train'][0]['input'])
@@ -702,7 +724,7 @@ class ARCSolver:
             y = (train_output.shape[1] * test_input.shape[1] // train_input.shape[1])
 
         try:
-            grid = np.array(self.parse_grid(output))
+            grid = np.array(self.parse_grid(original_ids))
             # grid = grid[:x, :y]
             
         except Exception as e:
@@ -728,6 +750,7 @@ class ARCSolver:
                 is_trainable=False
             )
             print("Loaded LoRA adapter")
+            print(f"LM Head weight shape: {self.model.lm_head.linear.weight.shape}")
         except Exception as e:
             print(f"No LoRA adapter found or incompatible: {e}")
             

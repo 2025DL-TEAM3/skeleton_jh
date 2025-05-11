@@ -10,6 +10,7 @@ import json
 import random
 
 WORKSPACE = os.getenv("INTRODL2025_WORKSPACE", "/home/top321902/code/intro_dl/term_project")
+print("WORKSPACE:", WORKSPACE)
 
 def shape_accuracy(prediction, ground_truth):
     """
@@ -80,7 +81,7 @@ def visualize_example(task_id, test_input, ground_truth, prediction):
     plt.close()
 
 def evaluate(args):
-    solver = ARCSolver(token=args.token)
+    solver = ARCSolver(token=args.token, checkpoint_save_path=args.checkpoint_save_path)
     solver.prepare_evaluation(checkpoint_name=args.checkpoint_name)
     
     dataset = ARCDataset(args.dataset, solver=solver)
@@ -108,9 +109,11 @@ def evaluate(args):
         
         test_input = test_example['input']
         ground_truth = test_example['output']
+        print(f"ground_truth: {ground_truth}")
         
         try:
             prediction = solver.predict(train_examples, test_input)
+            print(f"prediction: {prediction}")
             
             correct = is_correct(prediction, ground_truth)
             shape_acc = shape_accuracy(prediction, ground_truth)
@@ -178,7 +181,8 @@ def print_args(args):
     print(f"Dataset Path: {args.dataset}")
     print(f"Number of examples: {args.num_examples}")
     print(f"Visualize: {args.visualize}")
-    print(f"Checkpoint path: {args.checkpoint_name}")
+    print(f"Checkpoint save path: {args.checkpoint_save_path}")
+    print(f"Checkpoint name: {args.checkpoint_name}")
     print(f"Output directory: {args.output_dir}")
     print(f"Output file: {args.output_file}")
         
@@ -198,6 +202,9 @@ def main():
     parser.add_argument('--output_file', type=str, default="evaluation_results.json",
                         help='File name to save the results')
     args = parser.parse_args()
+    
+    checkpoint_save_path = os.path.join(WORKSPACE, "skeleton", "artifacts", "train-2025-05-11-01-56-25")
+    args.checkpoint_save_path = checkpoint_save_path
 
     print_args(args)
     evaluate(args)
