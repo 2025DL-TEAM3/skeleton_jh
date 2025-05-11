@@ -134,7 +134,7 @@ class ARCSolver:
         model_id = "Qwen/Qwen3-4B"
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         
-        self.checkpoint_save_path = checkpoint_save_path if checkpoint_save_path else "artifacts/default"
+        self.checkpoint_save_path = checkpoint_save_path if checkpoint_save_path else "artifacts"
 
         # Configure the BitsAndBytes settings for 4-bit quantization to reduce memory usage
         bnb_config = BitsAndBytesConfig(
