@@ -195,7 +195,7 @@ def main():
                         help='Number of examples to evaluate')
     parser.add_argument('--visualize', action='store_true', 
                         help='Visualize predictions')
-    parser.add_argument('--checkpoint_name', type=str, default="checkpoint-final", 
+    parser.add_argument('--checkpoint_name', type=str, default="train-2025-05-11-01-56-25/checkpoint-final", 
                         help='Path to the checkpoint file')
     parser.add_argument('--output_dir', type=str, default="results",
                         help='Directory to save the results')
@@ -203,8 +203,11 @@ def main():
                         help='File name to save the results')
     args = parser.parse_args()
     
-    checkpoint_save_path = os.path.join(WORKSPACE, "skeleton", "artifacts", "train-2025-05-11-01-56-25")
+    parent_dir = os.path.dirname(args.checkpoint_name)
+    checkpoint_name = os.path.basename(args.checkpoint_name)
+    checkpoint_save_path = os.path.join(WORKSPACE, "skeleton", "artifacts", parent_dir)
     args.checkpoint_save_path = checkpoint_save_path
+    args.checkpoint_name = checkpoint_name
 
     print_args(args)
     evaluate(args)

@@ -725,9 +725,11 @@ class ARCSolver:
 
         try:
             grid = np.array(self.parse_grid(original_ids))
+            print(f"parsed grid: {grid}")
             # grid = grid[:x, :y]
             
         except Exception as e:
+            print(f"Error parsing grid: {e}")
             grid = np.random.randint(0, 10, (x, y))
 
         return grid
