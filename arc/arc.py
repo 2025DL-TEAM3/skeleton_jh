@@ -166,6 +166,7 @@ class ARCSolver:
         )
         
         if enable_gradient_checkpointing:
+            print("Enabling gradient checkpointing for memory efficiency.")
             self.model.gradient_checkpointing_enable()
             self.model.config.use_cache = False
             if hasattr(self.model, "enable_input_require_grads"):

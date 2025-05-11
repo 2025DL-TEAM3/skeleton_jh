@@ -41,8 +41,8 @@ def main():
     print("Starting training...")
     solver.train(
         dataset,
-        num_epochs=7,
-        batch_size=2,
+        num_epochs=5,
+        batch_size=4,
     )
     
     print("Training completed!")

@@ -100,8 +100,9 @@ def evaluate(args):
     cell_accuracies = []
     
     for i, task in enumerate(selected_tasks):
-        print(f"Evaluating example {i+1}/{num_tasks_to_evaluate}...")
+        print(f"#### Evaluating example {i+1}/{num_tasks_to_evaluate}...")
         task_id = task["task_id"]
+        print(f"--- Task ID: {task_id} ---")
 
         sampled_examples = random.sample(task["examples"], 4)
         train_examples = sampled_examples[:3]
@@ -109,6 +110,7 @@ def evaluate(args):
         
         test_input = test_example['input']
         ground_truth = test_example['output']
+        ground_truth = np.array(ground_truth)
         print(f"ground_truth: {ground_truth}")
         
         try:
@@ -135,7 +137,7 @@ def evaluate(args):
             
             results.append(result)
             
-            print(f"--- Task ID: {task_id} ---")
+            
             print(f"Correct: {correct}")
             print(f"Shape Accuracy: {shape_acc}")
             print(f"Cell Accuracy: {cell_acc}")
