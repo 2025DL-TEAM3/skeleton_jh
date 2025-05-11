@@ -3,6 +3,7 @@ import datetime
 from arc import ARCSolver, ARCDataset
 
 WORKSPACE = os.getenv("INTRODL2025_WORKSPACE", "/home/top321902/code/intro_dl/term_project")
+print("WORKSPACE:", WORKSPACE)
 
 def main():
     parser = argparse.ArgumentParser(description='Train ARCSolver with ARC dataset')
