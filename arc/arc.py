@@ -248,7 +248,7 @@ class ARCSolver:
                 12 
                 34
         """
-        return self.sep_str.join("".join(str(c) for c in row) for row in grid)
+        return self.sep_str.join("".join(str(c) for c in row) for row in grid) + self.sep_str
 
     def format_prompt(self, datapoint: DataPointDict) -> FormattedPrompt:
         """
@@ -568,7 +568,8 @@ class ARCSolver:
             output (Grid): A 2d grid,
                 which is the output of given input question.
         """
-        self.test_time_training(examples)
+        if hasattr(self, "enable_ttt") and self.enable_ttt:
+            self.test_time_training(examples)
         
         datapoint: DataPointDict = {
             "train": examples,
@@ -629,11 +630,13 @@ class ARCSolver:
     def prepare_evaluation(
         self,
         checkpoint_name: str = "checkpoint-final",
+        enable_ttt: bool = False,
     ):
         """
         Load pretrained weight, make model eval mode, etc.
         """
         checkpoint_path = os.path.join(self.checkpoint_save_path, checkpoint_name)
+        self.enable_ttt = enable_ttt
         
         # LoRA 어댑터 로드
         try:
@@ -641,7 +644,7 @@ class ARCSolver:
             self.model = PeftModel.from_pretrained(
                 self.model,
                 checkpoint_path,
-                is_trainable=True,
+                is_trainable=self.enable_ttt,
             )
             print("Loaded LoRA adapter")
         except Exception as e:

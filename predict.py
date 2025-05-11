@@ -25,10 +25,13 @@ def is_correct(prediction, ground_truth):
     """
     Calculate grid accuracy - if prediction and ground truth are the same
     """
-    if not shape_accuracy(prediction, ground_truth):
-        return False
+    pred_np = np.array(prediction)
+    true_np = np.array(ground_truth)
     
-    return np.array_equal(prediction, ground_truth)
+    if len(pred_np.shape) != 2 or pred_np.shape != true_np.shape:
+        return 0
+    else:
+        return int(np.all(pred_np == true_np))
 
 def cell_accuracy(prediction, ground_truth):
     """
@@ -82,7 +85,10 @@ def visualize_example(task_id, test_input, ground_truth, prediction):
 
 def evaluate(args):
     solver = ARCSolver(token=args.token, checkpoint_save_path=args.checkpoint_save_path)
-    solver.prepare_evaluation(checkpoint_name=args.checkpoint_name)
+    solver.prepare_evaluation(
+        checkpoint_name=args.checkpoint_name,
+        enable_ttt=(not args.no_ttt),
+    )
     
     dataset = ARCDataset(args.dataset, solver=solver)
     all_tasks = dataset.all_tasks
@@ -187,6 +193,7 @@ def print_args(args):
     print(f"Checkpoint name: {args.checkpoint_name}")
     print(f"Output directory: {args.output_dir}")
     print(f"Output file: {args.output_file}")
+    print(f"Disable TTT: {args.no_ttt}")
         
 def main():
     parser = argparse.ArgumentParser(description='Evaluate ARCSolver on ARC dataset')
@@ -203,6 +210,8 @@ def main():
                         help='Directory to save the results')
     parser.add_argument('--output_file', type=str, default="evaluation_results.json",
                         help='File name to save the results')
+    parser.add_argument('--no_ttt', action='store_true',
+                        help='Disable TTT (Task Transfer Training)')
     args = parser.parse_args()
     
     parent_dir = os.path.dirname(args.checkpoint_name)
