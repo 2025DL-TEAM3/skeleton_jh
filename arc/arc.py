@@ -323,8 +323,6 @@ class ARCSolver:
         ------------------------------------------
         model(input_ids=inp, labels=labels)  →  .loss
         """
-        print(f"original target text: {[self.tokenizer.decode(t) for t in target_ids[0].tolist()]}")
-        print(f"original target_ids: {target_ids[0].tolist()}")
 
         inp = torch.cat([prompt_ids, target_ids], dim=1)
         attn_mask = inp.ne(self.tokenizer.pad_token_id).long()
@@ -340,7 +338,7 @@ class ARCSolver:
         peft_config = LoraConfig(
             task_type="CAUSAL_LM",
             inference_mode=False,
-            r=8, 
+            r=16, 
             lora_alpha=32,  
             lora_dropout=0.1,
             target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
@@ -558,8 +556,6 @@ class ARCSolver:
             
         N_prompt = input_ids.size(1)
         output_ids = output_ids[N_prompt:].tolist() # generated portion
-        print(f"Prediction ids: {output_ids}")
-        print(f"Prediction text: {[self.tokenizer.decode(t) for t in output_ids]}")
         
         prompt = self.format_prompt(datapoint)
         train_input = np.array(prompt['train'][0]['input'])
@@ -576,11 +572,10 @@ class ARCSolver:
 
         try:
             grid = np.array(self.parse_grid(output_ids))
-            print(f"parsed grid: {grid}")
             # grid = grid[:x, :y]
             
         except Exception as e:
-            print(f"Error parsing grid: {e}")
+            # print(f"Error parsing grid: {e}")
             grid = np.random.randint(0, 10, (x, y))
 
         return grid
