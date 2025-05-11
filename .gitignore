@@ -3,3 +3,7 @@ artifacts/
 *train*.txt
 !requirements.txt
 results/
+
+# Checkpoint files
+!artifacts/train-qwen0.6b-rank8
+!artifacts/train-qwen4b-rank16
