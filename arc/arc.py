@@ -26,6 +26,38 @@ import torch.nn.functional as F
 from .utils import system_prompt, user_message_template1, user_message_template2, user_message_template3
 from .datatypes import *
 
+def train_test_example_to_input_target_ids(
+    train_examples: List[ExampleDict],
+    test_example: ExampleDict,
+    solver: "ARCSolver",
+    keep_batch_dim: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    datapoint: DataPointDict = {
+        "train": train_examples,
+        "test": [
+            {
+                "input": test_example["input"],
+            }
+        ]
+    }
+    input_ids = solver.datapoint_to_input(datapoint, keep_batch_dim=False)
+    
+    target_ids = torch.tensor(
+        solver.format_grid(test_example["output"]), dtype=torch.long
+    )
+    
+    # concat eos
+    eos = solver.tokenizer.eos_token_id
+    if target_ids[-1] != eos:
+        target_ids = torch.cat([target_ids, torch.tensor([eos], dtype=torch.long, device=target_ids.device)])
+    
+    if keep_batch_dim:
+        input_ids = input_ids.unsqueeze(0)
+        target_ids = target_ids.unsqueeze(0)
+    
+    return input_ids, target_ids
+    
+
 class ARCDataset(Dataset):
     def __init__(
         self, 
@@ -87,28 +119,13 @@ class ARCDataset(Dataset):
         train_examples = sampled_examples[:self.num_samples_per_task - 1]
         test_example = sampled_examples[self.num_samples_per_task - 1]
         
-        datapoint: DataPointDict = {
-            "task": task["task_id"],
-            "train": train_examples,
-            "test": [
-                {
-                    "input": test_example["input"],
-                }
-            ]
-        }
-        
-        input_ids = self.solver.datapoint_to_input(datapoint, keep_batch_dim=False)
-        
-        target_ids = torch.tensor(
-            self.solver.format_grid(test_example["output"]), dtype=torch.long
+        input_ids, target_ids = train_test_example_to_input_target_ids(
+            train_examples,
+            test_example,
+            self.solver,
+            keep_batch_dim=False,
         )
         
-        # concat eos
-        eos = self.solver.tokenizer.eos_token_id
-        if target_ids[-1] != eos:
-            target_ids = torch.cat([target_ids, torch.tensor([eos], dtype=torch.long, device=target_ids.device)])
-        
-        # Note: it might raise runtime error if they are variable length
         return {
             "input_ids": input_ids,
             "target_ids": target_ids,
@@ -513,26 +530,15 @@ class ARCSolver:
                 few_shot_examples = [
                     ex for idx, ex in enumerate(original_examples) if idx != i
                 ]
-                
-                test_input = curernt_train_on_example["input"]
-                
-                ttt_datapoint: DataPointDict = {
-                    "train": few_shot_examples,
-                    "test": [
-                        {
-                            "input": test_input,
-                        }
-                    ]
-                }
-
-                input_ids = self.datapoint_to_input(ttt_datapoint, keep_batch_dim=False).to(self.device)
-                
-                target_ids = torch.tensor(
-                    self.format_grid(curernt_train_on_example["output"]), dtype=torch.long
-                ).to(self.device)
-                
-                input_ids = input_ids.unsqueeze(0)
-                target_ids = target_ids.unsqueeze(0)
+                                
+                input_ids, target_ids = train_test_example_to_input_target_ids(
+                    few_shot_examples,
+                    curernt_train_on_example,
+                    self,
+                    keep_batch_dim=True,
+                )
+                input_ids = input_ids.to(self.device)
+                target_ids = target_ids.to(self.device)
                 
                 optimizer.zero_grad()
                 loss = self.seq2seq_loss(input_ids, target_ids)
