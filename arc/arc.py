@@ -271,6 +271,8 @@ class ARCSolver:
                     grid.append(row.copy())
                     row.clear()
             else:
+                if idx == self.tokenizer.eos_token_id:
+                    break
                 row.append(inv_map.get(idx, 0))
         if len(row) > 0:
             grid.append(row)
