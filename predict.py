@@ -1,4 +1,5 @@
 import argparse
+import traceback
 import os
 import numpy as np
 from arc import ARCSolver, ARCDataset
@@ -117,11 +118,11 @@ def evaluate(args):
         test_input = test_example['input']
         ground_truth = test_example['output']
         ground_truth = np.array(ground_truth)
-        print(f"ground_truth: {ground_truth}")
+        print(f"ground_truth: \n{ground_truth}")
         
         try:
             prediction = solver.predict(train_examples, test_input)
-            print(f"prediction: {prediction}")
+            print(f"prediction: \n{prediction}")
             
             correct = is_correct(prediction, ground_truth)
             shape_acc = shape_accuracy(prediction, ground_truth)
@@ -155,6 +156,7 @@ def evaluate(args):
                 visualize_example(task_id, test_input, ground_truth, prediction)
         except Exception as e:
             print(f"Error processing task {task_id}: {e}")
+            traceback.print_exc()
             continue
         
     if results:

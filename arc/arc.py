@@ -636,7 +636,7 @@ class ARCSolver:
     def prepare_evaluation(
         self,
         checkpoint_name: str = "checkpoint-final",
-        enable_ttt: bool = False,
+        enable_ttt: bool = True,
     ):
         """
         Load pretrained weight, make model eval mode, etc.
@@ -655,6 +655,7 @@ class ARCSolver:
             print("Loaded LoRA adapter")
         except Exception as e:
             print(f"No LoRA adapter found or incompatible: {e}")
+            
             
         self.model.eval()
         
