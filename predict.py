@@ -2,13 +2,16 @@ import argparse
 import traceback
 import os
 import numpy as np
-from arc import ARCSolver, ARCDataset
+
 import torch
 import matplotlib.pyplot as plt
 from sklearn.metrics import accuracy_score
 import glob
 import json
 import random
+
+from myarc import ARCSolver
+from myarc import arc_utils
 
 WORKSPACE = os.getenv("INTRODL2025_WORKSPACE", "/home/top321902/code/intro_dl/term_project")
 print("WORKSPACE:", WORKSPACE)
@@ -88,11 +91,11 @@ def evaluate(args):
     solver = ARCSolver(token=args.token, checkpoint_save_path=args.checkpoint_save_path)
     solver.prepare_evaluation(
         checkpoint_name=args.checkpoint_name,
-        enable_ttt=(not args.no_ttt),
+        enable_ttt=args.enable_ttt,
+        enable_thinking=args.enable_thinking,
     )
     
-    dataset = ARCDataset(args.dataset, solver=solver)
-    all_tasks = dataset.all_tasks
+    all_tasks = arc_utils.load_json_normal_tasks(args.dataset)
     
     random.seed(42)
     
@@ -195,7 +198,8 @@ def print_args(args):
     print(f"Checkpoint name: {args.checkpoint_name}")
     print(f"Output directory: {args.output_dir}")
     print(f"Output file: {args.output_file}")
-    print(f"Disable TTT: {args.no_ttt}")
+    print(f"Enable TTT: {args.enable_ttt}")
+    print(f"Enable reasoning: {args.enable_thinking}")
         
 def main():
     parser = argparse.ArgumentParser(description='Evaluate ARCSolver on ARC dataset')
@@ -212,8 +216,10 @@ def main():
                         help='Directory to save the results')
     parser.add_argument('--output_file', type=str, default="evaluation_results.json",
                         help='File name to save the results')
-    parser.add_argument('--no_ttt', action='store_true',
-                        help='Disable TTT (Task Transfer Training)')
+    parser.add_argument('--enable_ttt', action='store_true',
+                        help='Enable TTT (Teacher-Student Transfer)')
+    parser.add_argument("--enable_thinking", action="store_true",
+                        help="Enable reasoning (thinking) in the model")
     args = parser.parse_args()
     
     parent_dir = os.path.dirname(args.checkpoint_name)

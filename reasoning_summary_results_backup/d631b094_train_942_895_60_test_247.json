@@ -1,0 +1,217 @@
+{
+    "task_id": "d631b094",
+    "train_indices": [
+        942,
+        895,
+        60
+    ],
+    "test_index": 247,
+    "datapoint": {
+        "train": [
+            {
+                "input": [
+                    [
+                        9,
+                        0,
+                        0,
+                        9,
+                        0,
+                        9
+                    ],
+                    [
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        9
+                    ],
+                    [
+                        0,
+                        0,
+                        0,
+                        9,
+                        0,
+                        0
+                    ],
+                    [
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0
+                    ],
+                    [
+                        9,
+                        9,
+                        0,
+                        0,
+                        0,
+                        0
+                    ],
+                    [
+                        0,
+                        0,
+                        0,
+                        0,
+                        9,
+                        0
+                    ]
+                ],
+                "output": [
+                    [
+                        9,
+                        9,
+                        9,
+                        9,
+                        9,
+                        9,
+                        9,
+                        9
+                    ]
+                ]
+            },
+            {
+                "input": [
+                    [
+                        0,
+                        5,
+                        0,
+                        0
+                    ],
+                    [
+                        0,
+                        5,
+                        5,
+                        0
+                    ],
+                    [
+                        0,
+                        0,
+                        5,
+                        0
+                    ],
+                    [
+                        0,
+                        0,
+                        0,
+                        0
+                    ],
+                    [
+                        0,
+                        0,
+                        0,
+                        0
+                    ],
+                    [
+                        0,
+                        0,
+                        0,
+                        5
+                    ],
+                    [
+                        0,
+                        0,
+                        0,
+                        0
+                    ]
+                ],
+                "output": [
+                    [
+                        5,
+                        5,
+                        5,
+                        5,
+                        5
+                    ]
+                ]
+            },
+            {
+                "input": [
+                    [
+                        5,
+                        0,
+                        0,
+                        0,
+                        5,
+                        0,
+                        0,
+                        5
+                    ],
+                    [
+                        5,
+                        0,
+                        5,
+                        0,
+                        5,
+                        0,
+                        0,
+                        0
+                    ],
+                    [
+                        0,
+                        0,
+                        5,
+                        0,
+                        5,
+                        5,
+                        0,
+                        0
+                    ]
+                ],
+                "output": [
+                    [
+                        5,
+                        5,
+                        5,
+                        5,
+                        5,
+                        5,
+                        5,
+                        5,
+                        5
+                    ]
+                ]
+            }
+        ],
+        "test": [
+            {
+                "input": [
+                    [
+                        0,
+                        0,
+                        0,
+                        4,
+                        0,
+                        0,
+                        0
+                    ],
+                    [
+                        0,
+                        0,
+                        0,
+                        4,
+                        4,
+                        4,
+                        4
+                    ]
+                ]
+            }
+        ]
+    },
+    "input_messages": [
+        {
+            "role": "system",
+            "content": "You are a puzzle solving wizard. You are given a puzzle from the abstraction and reasoning corpus developed by Francois Chollet."
+        },
+        {
+            "role": "user",
+            "content": "Here are the example input and output pairs from which you should learn the underlying rule to later predict the output for the given test input:\n----------------------------------------\ninput:\n900909\n000009\n000900\n000000\n990000\n000090\n\noutput:\n99999999\n\ninput:\n0500\n0550\n0050\n0000\n0000\n0005\n0000\n\noutput:\n55555\n\ninput:\n50005005\n50505000\n00505500\n\noutput:\n555555555\n\n\n----------------------------------------\nNow, solve the following puzzle based on its input grid by applying the rules you have learned from the training data.:\n----------------------------------------\n\nWhat is the output grid? Only provide the output grid in the form as in the example input and output pairs. Do not provide any additional information:\n----------------------------------------\ninput:\n0004000\n0004444\n\n"
+        }
+    ],
+    "output_text": "44444",
+    "reasoning": "**Calculating digit presence**\n\nI see that the input consists of two rows, with the digit \"4\" being our focus. In the first row, \"0004000\", there's just one \"4\". Moving to the second row, \"0004444\", I initially thought there were three but actually, I can count four instances of \"4\". So, combined, that makes a total of five \"4\"s. Therefore, the output grid would simply be \"44444,\" without any extra spaces. It feels like I've covered that neatly!",
+    "test_output_text": "44444\n",
+    "correct": true
+}

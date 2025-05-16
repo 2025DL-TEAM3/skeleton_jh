@@ -1,6 +1,7 @@
 import argparse, os
 import datetime
-from arc import ARCSolver, ARCDataset
+from myarc import ARCSolver
+from myarc.arc_dataset import build_hf_dataset
 
 WORKSPACE = os.getenv("INTRODL2025_WORKSPACE", "/home/top321902/code/intro_dl/term_project")
 print("WORKSPACE:", WORKSPACE)
@@ -36,13 +37,20 @@ def main():
     )
     
     print("Loading dataset...")
-    dataset = ARCDataset(args.dataset, solver=solver)
+    hf_dataset = build_hf_dataset(
+        dataset_path="../dataset",
+        # dataset_path=None,
+        reasoning_task_path="reasoning_summary_results_backup",
+        num_samples_per_normal_task=4,
+    )
+    hf_dataset_splitted = hf_dataset.train_test_split(test_size=0.1)
         
     print("Starting training...")
     solver.train(
-        dataset,
-        num_epochs=5,
-        batch_size=4,
+        train_dataset=hf_dataset_splitted["train"],
+        eval_dataset=hf_dataset_splitted["test"],
+        num_epochs=4,
+        batch_size=1,
     )
     
     print("Training completed!")

@@ -1,0 +1,244 @@
+{
+    "task_id": "c59eb873",
+    "train_indices": [
+        671,
+        944,
+        31
+    ],
+    "test_index": 45,
+    "datapoint": {
+        "train": [
+            {
+                "input": [
+                    [
+                        4,
+                        1,
+                        3
+                    ],
+                    [
+                        4,
+                        7,
+                        3
+                    ],
+                    [
+                        4,
+                        3,
+                        4
+                    ],
+                    [
+                        4,
+                        7,
+                        4
+                    ],
+                    [
+                        2,
+                        4,
+                        4
+                    ]
+                ],
+                "output": [
+                    [
+                        4,
+                        4,
+                        1,
+                        1,
+                        3,
+                        3
+                    ],
+                    [
+                        4,
+                        4,
+                        1,
+                        1,
+                        3,
+                        3
+                    ],
+                    [
+                        4,
+                        4,
+                        7,
+                        7,
+                        3,
+                        3
+                    ],
+                    [
+                        4,
+                        4,
+                        7,
+                        7,
+                        3,
+                        3
+                    ],
+                    [
+                        4,
+                        4,
+                        3,
+                        3,
+                        4,
+                        4
+                    ],
+                    [
+                        4,
+                        4,
+                        3,
+                        3,
+                        4,
+                        4
+                    ],
+                    [
+                        4,
+                        4,
+                        7,
+                        7,
+                        4,
+                        4
+                    ],
+                    [
+                        4,
+                        4,
+                        7,
+                        7,
+                        4,
+                        4
+                    ],
+                    [
+                        2,
+                        2,
+                        4,
+                        4,
+                        4,
+                        4
+                    ],
+                    [
+                        2,
+                        2,
+                        4,
+                        4,
+                        4,
+                        4
+                    ]
+                ]
+            },
+            {
+                "input": [
+                    [
+                        0,
+                        9,
+                        9,
+                        8,
+                        8
+                    ],
+                    [
+                        1,
+                        0,
+                        8,
+                        2,
+                        8
+                    ]
+                ],
+                "output": [
+                    [
+                        0,
+                        0,
+                        9,
+                        9,
+                        9,
+                        9,
+                        8,
+                        8,
+                        8,
+                        8
+                    ],
+                    [
+                        0,
+                        0,
+                        9,
+                        9,
+                        9,
+                        9,
+                        8,
+                        8,
+                        8,
+                        8
+                    ],
+                    [
+                        1,
+                        1,
+                        0,
+                        0,
+                        8,
+                        8,
+                        2,
+                        2,
+                        8,
+                        8
+                    ],
+                    [
+                        1,
+                        1,
+                        0,
+                        0,
+                        8,
+                        8,
+                        2,
+                        2,
+                        8,
+                        8
+                    ]
+                ]
+            },
+            {
+                "input": [
+                    [
+                        8
+                    ]
+                ],
+                "output": [
+                    [
+                        8,
+                        8
+                    ],
+                    [
+                        8,
+                        8
+                    ]
+                ]
+            }
+        ],
+        "test": [
+            {
+                "input": [
+                    [
+                        3
+                    ],
+                    [
+                        2
+                    ],
+                    [
+                        1
+                    ],
+                    [
+                        9
+                    ],
+                    [
+                        6
+                    ]
+                ]
+            }
+        ]
+    },
+    "input_messages": [
+        {
+            "role": "system",
+            "content": "You are a puzzle solving wizard. You are given a puzzle from the abstraction and reasoning corpus developed by Francois Chollet."
+        },
+        {
+            "role": "user",
+            "content": "Here are the example input and output pairs from which you should learn the underlying rule to later predict the output for the given test input:\n----------------------------------------\ninput:\n413\n473\n434\n474\n244\n\noutput:\n441133\n441133\n447733\n447733\n443344\n443344\n447744\n447744\n224444\n224444\n\ninput:\n09988\n10828\n\noutput:\n0099998888\n0099998888\n1100882288\n1100882288\n\ninput:\n8\n\noutput:\n88\n88\n\n\n----------------------------------------\nNow, solve the following puzzle based on its input grid by applying the rules you have learned from the training data.:\n----------------------------------------\n\nWhat is the output grid? Only provide the output grid in the form as in the example input and output pairs. Do not provide any additional information:\n----------------------------------------\ninput:\n3\n2\n1\n9\n6\n\n"
+        }
+    ],
+    "output_text": "33\n33\n22\n22\n11\n11\n99\n99\n66\n66",
+    "reasoning": "",
+    "test_output_text": "33\n33\n22\n22\n11\n11\n99\n99\n66\n66\n",
+    "correct": true
+}
